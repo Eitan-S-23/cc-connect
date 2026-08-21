@@ -968,6 +968,53 @@ func TestClose_ForceKillsAllTrackedProcessesAfterCmdOverwrite(t *testing.T) {
 	}
 }
 
+func TestClose_WaitsForReadLoopAfterForceKillGrace(t *testing.T) {
+	oldCloseTimeout := codexSessionCloseTimeout
+	oldForceKillWait := codexSessionForceKillWait
+	codexSessionCloseTimeout = 10 * time.Millisecond
+	codexSessionForceKillWait = 10 * time.Millisecond
+	t.Cleanup(func() {
+		codexSessionCloseTimeout = oldCloseTimeout
+		codexSessionForceKillWait = oldForceKillWait
+	})
+
+	cs, err := newCodexSession(context.Background(), "codex", nil, t.TempDir(), "", "", "", "", "", nil, "", "", "")
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	cs.wg.Add(1)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- cs.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before read loop exited: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	cs.wg.Done()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after read loop exited")
+	}
+
+	select {
+	case _, ok := <-cs.Events():
+		if ok {
+			t.Fatal("events channel remained open after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("events channel was not closed")
+	}
+}
+
 func waitForThreadID(t *testing.T, cs *codexSession, want string) {
 	t.Helper()
 	timeout := time.After(5 * time.Second)

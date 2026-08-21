@@ -160,6 +160,38 @@ func normalizeReasoningEffort(raw string) string {
 
 func (a *Agent) Name() string { return "codex" }
 
+func (a *Agent) SessionOwnershipScope() (string, error) {
+	a.mu.RLock()
+	codexHome := a.codexHome
+	workDir := a.workDir
+	a.mu.RUnlock()
+
+	home := resolveCodexHomeDir(codexHome)
+	if strings.TrimSpace(home) == "" {
+		return "", fmt.Errorf("codex: resolve CODEX_HOME")
+	}
+	if !filepath.IsAbs(home) && strings.TrimSpace(workDir) != "" {
+		home = filepath.Join(workDir, home)
+	}
+	abs, err := filepath.Abs(home)
+	if err != nil {
+		return "", fmt.Errorf("codex: resolve CODEX_HOME: %w", err)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	return filepath.Clean(abs), nil
+}
+
+func (a *Agent) IsSessionResumeConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already has an active writer") ||
+		strings.Contains(msg, "thread-store conflict")
+}
+
 func (a *Agent) SetWorkDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -353,7 +385,6 @@ func readCodexCachedModels() []core.ModelOption {
 	return parseCodexModelsJSON(b)
 }
 
-
 // parseCodexModelsJSON parses a Codex models JSON file (model_catalog.json
 // or models_cache.json) into a deduplicated, filtered slice of ModelOption.
 // It is shared by readCodexCachedModels and readCodexModelCatalog.
@@ -398,7 +429,6 @@ func parseCodexModelsJSON(data []byte) []core.ModelOption {
 	}
 	return models
 }
-
 
 // readCodexModelCatalog reads $CODEX_HOME/config.toml to find the
 // model_catalog_json setting, then reads and parses that JSON file.

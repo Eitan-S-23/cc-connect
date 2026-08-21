@@ -183,6 +183,8 @@ const (
 	MsgError                     MsgKey = "error"
 	MsgSessionNotFound           MsgKey = "session_not_found"
 	MsgFailedToStartAgentSession MsgKey = "failed_to_start_agent_session"
+	MsgSessionOwnershipConflict  MsgKey = "session_ownership_conflict"
+	MsgSessionResumeConflict     MsgKey = "session_resume_conflict"
 	MsgFailedToDeleteSession     MsgKey = "failed_to_delete_session"
 	MsgEmptyResponse             MsgKey = "empty_response"
 	MsgPermissionPrompt          MsgKey = "permission_prompt"
@@ -378,31 +380,31 @@ const (
 	MsgCronIDLabel               MsgKey = "cron_id_label"
 	MsgCronFailedSuffix          MsgKey = "cron_failed_suffix"
 
-	MsgTimerNotAvailable  MsgKey = "timer_not_available"
-	MsgTimerUsage         MsgKey = "timer_usage"
-	MsgTimerAddUsage      MsgKey = "timer_add_usage"
-	MsgTimerAdded         MsgKey = "timer_added"
-	MsgTimerAddedExec     MsgKey = "timer_added_exec"
-	MsgTimerAddExecUsage  MsgKey = "timer_addexec_usage"
-	MsgTimerEmpty         MsgKey = "timer_empty"
-	MsgTimerListTitle     MsgKey = "timer_list_title"
-	MsgTimerListFooter    MsgKey = "timer_list_footer"
-	MsgTimerDelUsage      MsgKey = "timer_del_usage"
-	MsgTimerMuteUsage     MsgKey = "timer_mute_usage"
-	MsgTimerDeleted       MsgKey = "timer_deleted"
-	MsgTimerNotFound      MsgKey = "timer_not_found"
-	MsgTimerMuted         MsgKey = "timer_muted"
-	MsgTimerUnmuted       MsgKey = "timer_unmuted"
-	MsgTimerCardHint      MsgKey = "timer_card_hint"
-	MsgTimerBtnMute       MsgKey = "timer_btn_mute"
-	MsgTimerBtnUnmute     MsgKey = "timer_btn_unmute"
-	MsgTimerBtnDelete     MsgKey = "timer_btn_delete"
-	MsgTimerIDLabel       MsgKey = "timer_id_label"
-	MsgTimerScheduledLabel MsgKey = "timer_scheduled_label"
-	MsgTimerFailedSuffix  MsgKey = "timer_failed_suffix"
-	MsgCommandsTagAgent          MsgKey = "commands_tag_agent"
-	MsgCommandsTagShell          MsgKey = "commands_tag_shell"
-	MsgUpgradeTimeoutSuffix      MsgKey = "upgrade_timeout_suffix"
+	MsgTimerNotAvailable    MsgKey = "timer_not_available"
+	MsgTimerUsage           MsgKey = "timer_usage"
+	MsgTimerAddUsage        MsgKey = "timer_add_usage"
+	MsgTimerAdded           MsgKey = "timer_added"
+	MsgTimerAddedExec       MsgKey = "timer_added_exec"
+	MsgTimerAddExecUsage    MsgKey = "timer_addexec_usage"
+	MsgTimerEmpty           MsgKey = "timer_empty"
+	MsgTimerListTitle       MsgKey = "timer_list_title"
+	MsgTimerListFooter      MsgKey = "timer_list_footer"
+	MsgTimerDelUsage        MsgKey = "timer_del_usage"
+	MsgTimerMuteUsage       MsgKey = "timer_mute_usage"
+	MsgTimerDeleted         MsgKey = "timer_deleted"
+	MsgTimerNotFound        MsgKey = "timer_not_found"
+	MsgTimerMuted           MsgKey = "timer_muted"
+	MsgTimerUnmuted         MsgKey = "timer_unmuted"
+	MsgTimerCardHint        MsgKey = "timer_card_hint"
+	MsgTimerBtnMute         MsgKey = "timer_btn_mute"
+	MsgTimerBtnUnmute       MsgKey = "timer_btn_unmute"
+	MsgTimerBtnDelete       MsgKey = "timer_btn_delete"
+	MsgTimerIDLabel         MsgKey = "timer_id_label"
+	MsgTimerScheduledLabel  MsgKey = "timer_scheduled_label"
+	MsgTimerFailedSuffix    MsgKey = "timer_failed_suffix"
+	MsgCommandsTagAgent     MsgKey = "commands_tag_agent"
+	MsgCommandsTagShell     MsgKey = "commands_tag_shell"
+	MsgUpgradeTimeoutSuffix MsgKey = "upgrade_timeout_suffix"
 
 	MsgCronScheduleLabel MsgKey = "cron_schedule_label"
 	MsgCronNextRunLabel  MsgKey = "cron_next_run_label"
@@ -820,6 +822,20 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "❌ 錯誤: 啟動 Agent 會話失敗",
 		LangJapanese:           "❌ エラー: Agentセッションの起動に失敗しました",
 		LangSpanish:            "❌ Error: error al iniciar la sesión del agente",
+	},
+	MsgSessionOwnershipConflict: {
+		LangEnglish:            "Session `%s` is already bound to project `%s` (cc-connect session `%s`). The existing binding was preserved.",
+		LangChinese:            "会话 `%s` 已绑定到项目 `%s`（cc-connect 会话 `%s`）。现有绑定已保留。",
+		LangTraditionalChinese: "會話 `%s` 已綁定到專案 `%s`（cc-connect 會話 `%s`）。現有綁定已保留。",
+		LangJapanese:           "セッション `%s` はプロジェクト `%s`（cc-connect セッション `%s`）にすでに割り当てられています。既存の割り当ては維持されました。",
+		LangSpanish:            "La sesión `%s` ya está vinculada al proyecto `%s` (sesión cc-connect `%s`). Se conservó la vinculación existente.",
+	},
+	MsgSessionResumeConflict: {
+		LangEnglish:            "Session `%s` already has an active writer. The saved binding was preserved; stop the other writer or retry after it exits.",
+		LangChinese:            "会话 `%s` 已有活动写入者。已保留现有绑定；请停止另一写入进程，或等待其退出后重试。",
+		LangTraditionalChinese: "會話 `%s` 已有活動寫入者。已保留現有綁定；請停止另一寫入程序，或等待其結束後重試。",
+		LangJapanese:           "セッション `%s` にはすでにアクティブな writer があります。保存済みの割り当ては維持されました。別の writer を停止するか、終了後に再試行してください。",
+		LangSpanish:            "La sesión `%s` ya tiene un escritor activo. Se conservó la vinculación guardada; detén el otro escritor o reintenta cuando termine.",
 	},
 	MsgFailedToDeleteSession: {
 		LangEnglish:            "❌ %s: %v",

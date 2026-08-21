@@ -255,6 +255,20 @@ type SessionIDValidator interface {
 	ValidateSessionID(ctx context.Context, sessionID string) bool
 }
 
+// SessionOwnershipScopeProvider identifies the persistent agent-side store
+// where session IDs must have a single cc-connect owner. Agents that do not
+// share a single-writer session store should not implement this interface.
+type SessionOwnershipScopeProvider interface {
+	SessionOwnershipScope() (string, error)
+}
+
+// SessionResumeConflictClassifier lets an agent identify resume failures that
+// must not fall back to a fresh session. A single-writer conflict is temporary;
+// clearing the saved ID would lose the binding and hide the real problem.
+type SessionResumeConflictClassifier interface {
+	IsSessionResumeConflict(err error) bool
+}
+
 // TypingIndicator is an optional interface for platforms that can show a
 // "processing" indicator (typing bubble, emoji reaction, etc.) while the
 // agent is working. StartTyping is called when processing begins and returns

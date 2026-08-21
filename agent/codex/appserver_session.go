@@ -253,6 +253,8 @@ func (s *appServerSession) connect() error {
 	}
 	cmd := exec.CommandContext(s.ctx, "codex", args...)
 	cmd.Dir = s.workDir
+	prepareCmdForKill(cmd)
+	configureCmdCancel(cmd)
 	env := append([]string(nil), s.extraEnv...)
 	if s.codexHome != "" {
 		env = append(env, "CODEX_HOME="+s.codexHome)
@@ -946,10 +948,11 @@ func (s *appServerSession) Close() error {
 		_ = s.stdin.Close()
 		s.stdin = nil
 	}
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-	}
+	cmd := s.cmd
 	s.procMu.Unlock()
+	if err := forceKillCmd(cmd); err != nil {
+		slog.Warn("codex app-server: force kill failed", "error", err)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -960,6 +963,8 @@ func (s *appServerSession) Close() error {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
+		slog.Warn("codex app-server: close still waiting for process exit")
+		<-done
 	}
 
 	s.closeOnce.Do(func() {

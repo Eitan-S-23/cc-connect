@@ -1444,6 +1444,16 @@ func TestCUJ_C5_StopKeepsSameSession(t *testing.T) {
 	if env.activeSession(key).ID != oldID {
 		t.Fatalf("/stop changed active session %s → %s; should stay on same session", oldID, env.activeSession(key).ID)
 	}
+
+	env.plat.clearSent()
+	env.userSends("c5", "continue after stop")
+	env.waitFor("post-stop reply", 2*time.Second, func() bool { return len(env.plat.getSent()) >= 1 })
+	if env.activeSession(key).ID != oldID {
+		t.Fatalf("message after /stop changed active session %s → %s", oldID, env.activeSession(key).ID)
+	}
+	if env.lastSent() == "" {
+		t.Fatal("message after /stop got no agent reply")
+	}
 }
 
 // CUJ-C6 · /mode switches permission mode; verified via i18n reply text.

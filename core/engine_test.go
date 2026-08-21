@@ -7678,6 +7678,39 @@ func TestSessionMismatch_ReusesWhenIDsMatch(t *testing.T) {
 	}
 }
 
+func TestSessionMatch_RepeatedReuseDoesNotLeakInteractiveLock(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	agentSession := newControllableSession("agent-1")
+	agent := &controllableAgent{nextSession: agentSession}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	key := "test:user1"
+	session := e.sessions.GetOrCreateActive(key)
+	session.SetAgentSessionID("agent-1", agent.Name())
+	state := &interactiveState{agentSession: agentSession, platform: p, agent: agent}
+
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	for i := 0; i < 3; i++ {
+		if got := e.getOrCreateInteractiveStateWith(key, p, "ctx", session, e.sessions, nil, ""); got != state {
+			t.Fatalf("reuse %d returned replacement state", i+1)
+		}
+	}
+
+	locked := make(chan struct{})
+	go func() {
+		e.interactiveMu.Lock()
+		e.interactiveMu.Unlock()
+		close(locked)
+	}()
+	select {
+	case <-locked:
+	case <-time.After(time.Second):
+		t.Fatal("interactiveMu remained locked after repeated session reuse")
+	}
+}
+
 // TestSessionIDWriteback_ImmediateAfterStartSession verifies that after
 // StartSession, the agent's CurrentSessionID is immediately written back
 // to the Session's AgentSessionID when it was previously empty.
@@ -10453,6 +10486,80 @@ func TestCmdStop_ReturnsWhileCloseBlockedAndStopsEventLoop(t *testing.T) {
 	case <-sess.closed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Close did not finish after release")
+	}
+}
+
+func TestCmdStop_BlocksResumeUntilPreviousCloseFinishes(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	oldSession := newBlockingCloseSession("thread-stop-resume")
+	replacement := newControllableSession("thread-stop-resume")
+	startCalls := make(chan string, 1)
+	agent := &controllableAgent{
+		startSessionFn: func(_ context.Context, sessionID string) (AgentSession, error) {
+			startCalls <- sessionID
+			return replacement, nil
+		},
+	}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+	key := "test:user1"
+	session := e.sessions.GetOrCreateActive(key)
+	session.SetAgentSessionID("thread-stop-resume", agent.Name())
+
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = &interactiveState{
+		agentSession: oldSession,
+		platform:     p,
+		replyCtx:     "stop-ctx",
+		agent:        agent,
+	}
+	e.interactiveMu.Unlock()
+
+	stopDone := make(chan struct{})
+	go func() {
+		e.cmdStop(p, &Message{SessionKey: key, ReplyCtx: "stop-ctx"})
+		close(stopDone)
+	}()
+
+	select {
+	case <-oldSession.closeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected previous session Close to start")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("/stop blocked while previous session was closing")
+	}
+
+	resumeDone := make(chan *interactiveState, 1)
+	go func() {
+		resumeDone <- e.getOrCreateInteractiveStateWith(key, p, "resume-ctx", session, e.sessions, nil, "")
+	}()
+
+	select {
+	case sessionID := <-startCalls:
+		t.Fatalf("StartSession(%q) ran before previous Close finished", sessionID)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(oldSession.releaseClose)
+
+	select {
+	case sessionID := <-startCalls:
+		if sessionID != "thread-stop-resume" {
+			t.Fatalf("StartSession session ID = %q, want preserved thread ID", sessionID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartSession did not run after previous Close finished")
+	}
+
+	select {
+	case state := <-resumeDone:
+		if state.agentSession != replacement {
+			t.Fatal("resume did not install replacement agent session")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("resume remained blocked after previous Close finished")
 	}
 }
 
