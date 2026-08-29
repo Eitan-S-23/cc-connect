@@ -237,6 +237,18 @@ func main() {
 		runAntigravityPermissionHook()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "_daemon-supervise" {
+		runDaemonSupervisor(os.Args[2:])
+		return
+	}
+	if err := daemon.WaitForSupervisorStartGate(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := daemon.RequireSupervisedElevation(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 
 	checkUpdateAsync()
 	// When started as a daemon (CC_LOG_FILE set), redirect logs to a rotating file.

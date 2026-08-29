@@ -19,6 +19,15 @@ func prepareCmdForKill(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setpgid = true
 }
 
+func configureCmdCancel(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	cmd.Cancel = func() error {
+		return forceKillCmd(cmd)
+	}
+}
+
 func forceKillCmd(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil

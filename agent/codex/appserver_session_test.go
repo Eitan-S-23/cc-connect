@@ -342,6 +342,44 @@ func TestAppServerSession_HandleRequestUserInputWritesCodexResponse(t *testing.T
 	}
 }
 
+func TestAppServerSession_CloseWaitsForProcessExitAfterGrace(t *testing.T) {
+	oldCloseTimeout := appServerCloseTimeout
+	appServerCloseTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		appServerCloseTimeout = oldCloseTimeout
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &appServerSession{
+		ctx:     ctx,
+		cancel:  cancel,
+		events:  make(chan core.Event),
+		pending: make(map[int64]chan rpcResponseEnvelope),
+	}
+	s.wg.Add(1)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- s.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before app-server loops exited: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	s.wg.Done()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after app-server loops exited")
+	}
+}
+
 var _ interface {
 	GetUsage(context.Context) (*core.UsageReport, error)
 } = (*appServerSession)(nil)

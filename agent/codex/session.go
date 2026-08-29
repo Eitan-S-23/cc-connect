@@ -151,6 +151,7 @@ func (cs *codexSession) Send(prompt string, messageID string, images []core.Imag
 	cmd := exec.CommandContext(cs.ctx, bin, args...)
 	cmd.Dir = cs.workDir
 	prepareCmdForKill(cmd)
+	configureCmdCancel(cmd)
 	if len(cs.extraEnv) > 0 {
 		cmd.Env = core.MergeEnv(os.Environ(), cs.extraEnv)
 	}
@@ -660,6 +661,7 @@ func loadCodexRuntimeConfig(ctx context.Context, workDir string, extraEnv []stri
 	cmd := exec.CommandContext(ctx, "codex", "app-server")
 	cmd.Dir = workDir
 	prepareCmdForKill(cmd)
+	configureCmdCancel(cmd)
 	if len(extraEnv) > 0 {
 		cmd.Env = core.MergeEnv(os.Environ(), extraEnv)
 	}
@@ -680,9 +682,7 @@ func loadCodexRuntimeConfig(ctx context.Context, workDir string, extraEnv []stri
 	}
 	defer func() {
 		_ = stdin.Close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		_ = forceKillCmd(cmd)
 		_ = cmd.Wait()
 	}()
 
@@ -911,7 +911,7 @@ func (cs *codexSession) Close() error {
 			"wait", codexSessionCloseTimeout,
 			"count", len(cmds))
 		if err := forceKillAllCmds(cmds); err != nil {
-			slog.Debug("codexSession: force kill failed", "error", err)
+			slog.Warn("codexSession: force kill reported errors", "error", err)
 		}
 		select {
 		case <-done:
@@ -920,16 +920,13 @@ func (cs *codexSession) Close() error {
 			})
 			return nil
 		case <-time.After(codexSessionForceKillWait):
-			// Do not close(cs.events) here: readLoop may still be in handleEvent
-			// (e.g. turn.completed -> flushPendingAsText) and would panic on send.
-			slog.Warn("codexSession: force kill wait timed out, deferring events channel close until readLoop exits",
-				"wait", codexSessionForceKillWait)
-			go func() {
-				<-done
-				cs.closeOnce.Do(func() {
-					close(cs.events)
-				})
-			}()
+			slog.Warn("codexSession: force kill wait timed out, continuing to wait for process exit",
+				"wait", codexSessionForceKillWait,
+				"active_processes", len(cs.activeCmds()))
+			<-done
+			cs.closeOnce.Do(func() {
+				close(cs.events)
+			})
 			return nil
 		}
 	}

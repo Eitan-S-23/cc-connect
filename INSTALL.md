@@ -802,7 +802,17 @@ Logs auto-rotate at the configured max size and keep one backup.
 On Windows, `daemon install` creates a native Task Scheduler task named `cc-connect`.
 The task runs at user logon and is also started immediately after installation. The
 installer writes a small PowerShell launcher under `~/.cc-connect` so the scheduled
-task uses the selected config directory, log file, PATH, and proxy environment.
+task uses the selected config directory, log file, PATH, and proxy environment. The
+task requests the account's highest available privileges. Use an administrator account
+and run the install command from an elevated terminal when cc-connect needs an
+administrator token. Reinstall an existing task with `daemon install --force` for this
+setting to take effect. The Windows supervisor waits for an existing instance that owns
+the same config lock, adopts its process tree into a kill-on-close Job Object when
+Windows permits it, and otherwise tracks the existing descendant processes until the
+handoff. A per-config supervisor mutex prevents competing supervisors. The replacement
+starts only after the previous tree has exited. Every supervised replacement is required
+to have an elevated token. Normal and abnormal exits are restarted after 10 seconds;
+Task Scheduler also restarts the supervisor itself and rejects parallel task instances.
 
 ### Uninstall
 

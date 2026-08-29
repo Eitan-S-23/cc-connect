@@ -149,10 +149,12 @@ func windowsTaskActionArgs(scriptPath string) string {
 
 func createWindowsTask(scriptPath string) error {
 	out, err := runPowerShell(fmt.Sprintf(`
+$accountId = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument %s
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName %s -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $accountId
+$principal = New-ScheduledTaskPrincipal -UserId $accountId -LogonType Interactive -RunLevel Highest
+$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName %s -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 `, powerShellLiteral(windowsTaskActionArgs(scriptPath)), powerShellLiteral(windowsTaskName)))
 	if err != nil {
 		return fmt.Errorf("register scheduled task: %s (%w)", out, err)
@@ -165,6 +167,17 @@ func windowsTaskMatchesAction(scriptPath string) bool {
 $task = Get-ScheduledTask -TaskName %s -ErrorAction SilentlyContinue
 if ($null -eq $task) { exit 1 }
 $expectedArgs = %s
+$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+try {
+	$taskSid = ([Security.Principal.NTAccount]$task.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value
+} catch { exit 1 }
+if ($taskSid -ne $currentSid) { exit 1 }
+if ($task.Principal.RunLevel -ne 'Highest') { exit 1 }
+if ($task.Principal.LogonType -ne 'Interactive') { exit 1 }
+if ($task.Settings.MultipleInstances -ne 'IgnoreNew') { exit 1 }
+if ($task.Settings.ExecutionTimeLimit -ne 'PT0S') { exit 1 }
+if ($task.Settings.RestartCount -ne 999) { exit 1 }
+if ($task.Settings.RestartInterval -ne 'PT1M') { exit 1 }
 foreach ($action in $task.Actions) {
 	if (($action.Execute -ieq 'powershell.exe') -and ($action.Arguments -eq $expectedArgs)) {
 		Write-Output 'true'
@@ -204,13 +217,13 @@ func buildWindowsTaskScript(cfg Config) string {
 			writePowerShellEnv(&sb, key, value)
 		}
 	}
+	sb.WriteString("$identity = [Security.Principal.WindowsIdentity]::GetCurrent()\r\n")
+	sb.WriteString("$principal = [Security.Principal.WindowsPrincipal]::new($identity)\r\n")
+	sb.WriteString("if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'cc-connect daemon requires an elevated administrator token' }\r\n")
 	fmt.Fprintf(&sb, "Set-Location -LiteralPath %s\r\n", powerShellLiteral(cfg.WorkDir))
-	sb.WriteString("while ($true) {\r\n")
-	fmt.Fprintf(&sb, "  & %s\r\n", powerShellLiteral(cfg.BinaryPath))
-	sb.WriteString("  $exitCode = $LASTEXITCODE\r\n")
-	sb.WriteString("  if ($exitCode -eq 0) { exit 0 }\r\n")
-	sb.WriteString("  Start-Sleep -Seconds 10\r\n")
-	sb.WriteString("}\r\n")
+	configPath := filepath.Join(cfg.WorkDir, "config.toml")
+	fmt.Fprintf(&sb, "& %s '_daemon-supervise' '--config' %s\r\n", powerShellLiteral(cfg.BinaryPath), powerShellLiteral(configPath))
+	sb.WriteString("exit $LASTEXITCODE\r\n")
 	return sb.String()
 }
 

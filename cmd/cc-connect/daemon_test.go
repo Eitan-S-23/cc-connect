@@ -113,7 +113,9 @@ func TestParseDaemonInstallArgs_WorkDirOverridesConfig(t *testing.T) {
 		t.Fatalf("force = false, want true")
 	}
 
-	want := filepath.Clean("/tmp/override")
+	// The parser preserves the caller's path spelling; filepath.Clean on
+	// Windows would reinterpret the Unix-shaped fixture as a rooted DOS path.
+	want := "/tmp/override"
 	if cfg.WorkDir != want {
 		t.Fatalf("cfg.WorkDir = %q, want %q", cfg.WorkDir, want)
 	}

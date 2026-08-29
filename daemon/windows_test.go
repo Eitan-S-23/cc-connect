@@ -38,15 +38,18 @@ func TestBuildWindowsTaskScript(t *testing.T) {
 		`$env:PATH = 'C:\Program Files\nodejs;C:\Users\me\AppData\Local\Programs'`,
 		`$env:HTTPS_PROXY = 'http://127.0.0.1:7890'`,
 		`$env:http_proxy = 'http://127.0.0.1:7890'`,
+		`[Security.Principal.WindowsIdentity]::GetCurrent()`,
+		`[Security.Principal.WindowsBuiltInRole]::Administrator`,
 		`Set-Location -LiteralPath 'C:\Users\me\.cc-connect'`,
-		`while ($true) {`,
-		`& 'C:\Program Files\cc-connect\cc-connect.exe'`,
-		`if ($exitCode -eq 0) { exit 0 }`,
-		`Start-Sleep -Seconds 10`,
+		`& 'C:\Program Files\cc-connect\cc-connect.exe' '_daemon-supervise' '--config' 'C:\Users\me\.cc-connect\config.toml'`,
+		`exit $LASTEXITCODE`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("script missing %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, `while ($true)`) {
+		t.Fatalf("PowerShell launcher must delegate restart ownership to the Go supervisor:\n%s", script)
 	}
 }
 
@@ -66,7 +69,7 @@ func TestWindowsTaskActionRunsHidden(t *testing.T) {
 	}
 }
 
-func TestWindowsTaskCreateUsesLimitedInteractivePrincipal(t *testing.T) {
+func TestWindowsTaskCreateUsesHighestInteractivePrincipal(t *testing.T) {
 	orig := runPowerShell
 	t.Cleanup(func() { runPowerShell = orig })
 
@@ -80,16 +83,30 @@ func TestWindowsTaskCreateUsesLimitedInteractivePrincipal(t *testing.T) {
 		t.Fatalf("createWindowsTask() error = %v", err)
 	}
 	for _, want := range []string{
+		`[Security.Principal.WindowsIdentity]::GetCurrent().Name`,
+		`New-ScheduledTaskTrigger -AtLogOn -User $accountId`,
 		`New-ScheduledTaskAction`,
 		`Register-ScheduledTask`,
+		`-UserId $accountId`,
 		`-LogonType Interactive`,
-		`-RunLevel Limited`,
+		`-RunLevel Highest`,
+		`New-ScheduledTaskSettingsSet`,
+		`-RestartCount 999`,
+		`-RestartInterval (New-TimeSpan -Minutes 1)`,
+		`-ExecutionTimeLimit ([TimeSpan]::Zero)`,
+		`-MultipleInstances IgnoreNew`,
+		`-StartWhenAvailable`,
+		`-AllowStartIfOnBatteries`,
+		`-DontStopIfGoingOnBatteries`,
 		`-WindowStyle Hidden`,
 		`C:\Users\me\.cc-connect\cc-connect-daemon.ps1`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("create script missing %q:\n%s", want, script)
 		}
+	}
+	if strings.Contains(script, `-RunLevel Limited`) {
+		t.Fatalf("create script unexpectedly uses limited privileges:\n%s", script)
 	}
 }
 
@@ -108,6 +125,15 @@ func TestWindowsTaskMatchesActionRequiresExactAction(t *testing.T) {
 	}
 	for _, want := range []string{
 		`$expectedArgs = '-WindowStyle Hidden -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\Users\me\.cc-connect\cc-connect-daemon.ps1"'`,
+		`$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value`,
+		`([Security.Principal.NTAccount]$task.Principal.UserId).Translate([Security.Principal.SecurityIdentifier]).Value`,
+		`$taskSid -ne $currentSid`,
+		`$task.Principal.RunLevel -ne 'Highest'`,
+		`$task.Principal.LogonType -ne 'Interactive'`,
+		`$task.Settings.MultipleInstances -ne 'IgnoreNew'`,
+		`$task.Settings.ExecutionTimeLimit -ne 'PT0S'`,
+		`$task.Settings.RestartCount -ne 999`,
+		`$task.Settings.RestartInterval -ne 'PT1M'`,
 		`$action.Execute -ieq 'powershell.exe'`,
 		`$action.Arguments -eq $expectedArgs`,
 	} {
@@ -150,12 +176,7 @@ func TestBuildWindowsTaskScript_DropsEmptyValue(t *testing.T) {
 	}
 }
 
-// TestSchtasksInstall_TightensExistingScriptFrom0644 covers the upgrade
-// path: os.WriteFile would truncate-in-place and keep the old POSIX
-// mode of a script left by an earlier cc-connect version. While
-// Windows real access is governed by ACLs, the POSIX bits are still
-// expected to reflect intent.
-func TestSchtasksInstall_TightensExistingScriptFrom0644(t *testing.T) {
+func TestSchtasksInstall_ReplacesExistingScript(t *testing.T) {
 	t.Setenv("USERPROFILE", t.TempDir())
 
 	orig := runPowerShell
@@ -168,9 +189,6 @@ func TestSchtasksInstall_TightensExistingScriptFrom0644(t *testing.T) {
 	scriptPath := windowsTaskScriptPath()
 	if err := os.WriteFile(scriptPath, []byte("$env:OLD = 'leftover'\r\n"), 0o644); err != nil {
 		t.Fatalf("seed legacy script: %v", err)
-	}
-	if info, _ := os.Stat(scriptPath); info.Mode().Perm() != 0o644 {
-		t.Fatalf("precondition: seeded file mode = %o, want 0644", info.Mode().Perm())
 	}
 
 	mgr := &schtasksManager{}
@@ -185,11 +203,15 @@ func TestSchtasksInstall_TightensExistingScriptFrom0644(t *testing.T) {
 	if err := mgr.Install(cfg); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	info, err := os.Stat(scriptPath)
+	data, err := os.ReadFile(scriptPath)
 	if err != nil {
-		t.Fatalf("stat: %v", err)
+		t.Fatalf("read installed script: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("script mode after reinstall = %o, want 0600", info.Mode().Perm())
+	script := string(data)
+	if strings.Contains(script, "$env:OLD") {
+		t.Fatalf("legacy script content survived reinstall:\n%s", script)
+	}
+	if !strings.Contains(script, "$env:CUSTOM_TOKEN = 'captured'") {
+		t.Fatalf("installed script missing captured environment:\n%s", script)
 	}
 }
