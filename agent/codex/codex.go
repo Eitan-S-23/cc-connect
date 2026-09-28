@@ -511,12 +511,16 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	return newCodexSession(ctx, cliBin, cliExtraArgs, workDir, model, reasoningEffort, mode, sessionID, baseURL, extraEnv, provName, systemPrompt, appendPrompt)
 }
 
-func (a *Agent) ListSessions(_ context.Context) ([]core.AgentSessionInfo, error) {
+func (a *Agent) ListSessions(ctx context.Context) ([]core.AgentSessionInfo, error) {
+	// 容忍 nil ctx（仓库内已有直接传 nil 的调用方），避免列举整体 panic。
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	a.mu.RLock()
 	codexHome := a.codexHome
 	workDir := a.workDir
 	a.mu.RUnlock()
-	return listCodexSessions(workDir, codexHome)
+	return listCodexSessions(ctx, workDir, codexHome)
 }
 
 func (a *Agent) GetSessionHistory(_ context.Context, sessionID string, limit int) ([]core.HistoryEntry, error) {

@@ -7357,6 +7357,17 @@ const listPageSize = 20
 // dirCardPageSize is the max directory history rows per card page (Feishu / other card UIs).
 const dirCardPageSize = 20
 
+// sessionListTimeout 限制单次 agent 会话列举的时长。历史故障：一次全量扫描
+// 曾把会话占住近两小时不返回；超时至少能在固定时间内给出明确失败。
+const sessionListTimeout = 5 * time.Minute
+
+// listAgentSessions 列举 agent 会话，并给整次扫描套上超时与取消上下文。
+func (e *Engine) listAgentSessions(agent Agent) ([]AgentSessionInfo, error) {
+	ctx, cancel := context.WithTimeout(e.ctx, sessionListTimeout)
+	defer cancel()
+	return agent.ListSessions(ctx)
+}
+
 func (e *Engine) cmdList(p Platform, msg *Message, args []string) {
 	agent, sessions, _, err := e.commandContext(p, msg)
 	if err != nil {
@@ -7365,7 +7376,7 @@ func (e *Engine) cmdList(p Platform, msg *Message, args []string) {
 	}
 
 	if !supportsCards(p) {
-		agentSessions, err := agent.ListSessions(e.ctx)
+		agentSessions, err := e.listAgentSessions(agent)
 		if err != nil {
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgListError), err))
 			return
@@ -7462,7 +7473,7 @@ func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
 		return
 	}
-	agentSessions, err := agent.ListSessions(e.ctx)
+	agentSessions, err := e.listAgentSessions(agent)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return
@@ -8802,7 +8813,7 @@ func (e *Engine) cmdSearch(p Platform, msg *Message, args []string) {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
 		return
 	}
-	agentSessions, err := agent.ListSessions(e.ctx)
+	agentSessions, err := e.listAgentSessions(agent)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgSearchError), err))
 		return
@@ -8896,7 +8907,7 @@ func (e *Engine) cmdName(p Platform, msg *Message, args []string) {
 			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgNameUsage))
 			return
 		}
-		agentSessions, err := agent.ListSessions(e.ctx)
+		agentSessions, err := e.listAgentSessions(agent)
 		if err != nil {
 			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 			return
@@ -12716,7 +12727,7 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 			return
 		}
 		agent, sessions := e.sessionContextForKey(sessionKey)
-		agentSessions, err := agent.ListSessions(e.ctx)
+		agentSessions, err := e.listAgentSessions(agent)
 		if err != nil || len(agentSessions) == 0 {
 			return
 		}
@@ -12889,7 +12900,7 @@ func (e *Engine) getModelSwitchState(sessionKey string) *modelSwitchState {
 
 func (e *Engine) renderDeleteModeCard(sessionKey string) *Card {
 	agent, sessions := e.sessionContextForKey(sessionKey)
-	agentSessions, err := agent.ListSessions(e.ctx)
+	agentSessions, err := e.listAgentSessions(agent)
 	if err != nil {
 		return e.simpleCard(e.i18n.T(MsgDeleteModeTitle), "red", err.Error())
 	}
@@ -13258,7 +13269,7 @@ func (e *Engine) submitDeleteModeSelection(sessionKey string, selectedIDs map[st
 	if !ok {
 		return []string{e.i18n.T(MsgDeleteNotSupported)}
 	}
-	agentSessions, err := agent.ListSessions(e.ctx)
+	agentSessions, err := e.listAgentSessions(agent)
 	if err != nil {
 		return []string{e.i18n.Tf(MsgError, err)}
 	}
@@ -13470,7 +13481,7 @@ func (e *Engine) renderModeCard() *Card {
 
 func (e *Engine) renderListCard(sessionKey string, page int) (*Card, error) {
 	agent, sessions := e.sessionContextForKey(sessionKey)
-	agentSessions, err := agent.ListSessions(e.ctx)
+	agentSessions, err := e.listAgentSessions(agent)
 	if err != nil {
 		return nil, fmt.Errorf(e.i18n.T(MsgListError), err)
 	}
@@ -13650,7 +13661,7 @@ func (e *Engine) currentSessionDisplayName(agent Agent, sessions *SessionManager
 	if displayName != "" {
 		return displayName
 	}
-	agentSessions, err := agent.ListSessions(e.ctx)
+	agentSessions, err := e.listAgentSessions(agent)
 	if err == nil {
 		for _, as := range agentSessions {
 			if as.ID == agentID {
@@ -15814,7 +15825,7 @@ func (e *Engine) cmdDelete(p Platform, msg *Message, args []string) {
 		return
 	}
 
-	agentSessions, err := agent.ListSessions(e.ctx)
+	agentSessions, err := e.listAgentSessions(agent)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return

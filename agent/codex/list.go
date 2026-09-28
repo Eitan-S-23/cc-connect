@@ -3,8 +3,10 @@ package codex
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -33,25 +35,21 @@ func resolveCodexHomeDir(explicit string) string {
 
 // listCodexSessions scans the codex sessions directory for JSONL transcript
 // files whose cwd matches workDir.
-func listCodexSessions(workDir, codexHome string) ([]core.AgentSessionInfo, error) {
+//
+// 性能约定：归属过滤只读 rollout 首行；一次遍历同时建立 thread_id → 路径索引，
+// 取代“每个命中会话都全目录重扫一次”的旧实现（原为 O(命中数 × 文件总数)）；
+// 全程响应 ctx 取消，长扫描不会无限期占住会话。
+func listCodexSessions(ctx context.Context, workDir, codexHome string) ([]core.AgentSessionInfo, error) {
 	absWorkDir, err := filepath.Abs(workDir)
 	if err != nil {
 		absWorkDir = workDir
 	}
 
 	sessionsDir := filepath.Join(resolveCodexHomeDir(codexHome), "sessions")
-
-	var files []string
-	_ = filepath.Walk(sessionsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, ".jsonl") {
-			files = append(files, path)
-		}
-		return nil
-	})
-
+	files, pathByThread, err := scanCodexSessionFiles(ctx, sessionsDir)
+	if err != nil {
+		return nil, err
+	}
 	if len(files) == 0 {
 		return nil, nil
 	}
@@ -59,17 +57,26 @@ func listCodexSessions(workDir, codexHome string) ([]core.AgentSessionInfo, erro
 	sessionTitles := loadCodexSessionTitles(codexHome)
 	var sessions []core.AgentSessionInfo
 	for _, f := range files {
-		info := parseCodexSessionFile(f, absWorkDir)
-		if info != nil {
-			if title := sessionTitles[info.ID]; title != "" {
-				if titleRunes := []rune(title); len(titleRunes) > 60 {
-					title = string(titleRunes[:60]) + "..."
-				}
-				info.Summary = title
-			}
-			patchSessionSource(info.ID, codexHome)
-			sessions = append(sessions, *info)
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		info := parseCodexSessionFile(f, absWorkDir)
+		if info == nil {
+			continue
+		}
+		if title := sessionTitles[info.ID]; title != "" {
+			if titleRunes := []rune(title); len(titleRunes) > 60 {
+				title = string(titleRunes[:60]) + "..."
+			}
+			info.Summary = title
+		}
+		if path := pathByThread[info.ID]; path != "" {
+			patchSessionSourceFile(path)
+		} else {
+			// 文件名不含 thread_id 时的兜底，维持旧行为
+			patchSessionSource(info.ID, codexHome)
+		}
+		sessions = append(sessions, *info)
 	}
 
 	sort.Slice(sessions, func(i, j int) bool {
@@ -77,6 +84,54 @@ func listCodexSessions(workDir, codexHome string) ([]core.AgentSessionInfo, erro
 	})
 
 	return sessions, nil
+}
+
+// scanCodexSessionFiles 一次遍历收集全部 rollout 文件，并顺带建立
+// thread_id → 文件路径 索引，供 patchSessionSource 直接使用。
+func scanCodexSessionFiles(ctx context.Context, sessionsDir string) ([]string, map[string]string, error) {
+	var files []string
+	pathByThread := make(map[string]string)
+	err := filepath.WalkDir(sessionsDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		if walkErr != nil {
+			// 与旧实现一致：单个目录/文件不可读时跳过，不中断整体扫描
+			if entry != nil && entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		files = append(files, path)
+		if id := sessionIDFromRolloutName(entry.Name()); id != "" {
+			if _, exists := pathByThread[id]; !exists {
+				pathByThread[id] = path // 与旧 findSessionFile 一致：首个命中优先
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return files, pathByThread, nil
+}
+
+// sessionIDFromRolloutName 从 rollout 文件名提取 thread_id。
+// 形如 rollout-2026-09-18T23-43-01-<uuid>.jsonl：时间戳固定 19 字符，
+// 其后紧跟 '-' 与 UUID。格式不符时返回空串，由 findSessionFile 兜底。
+func sessionIDFromRolloutName(name string) string {
+	if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") {
+		return ""
+	}
+	stem := strings.TrimSuffix(strings.TrimPrefix(name, "rollout-"), ".jsonl")
+	const stampLen = len("2006-01-02T15-04-05")
+	if len(stem) <= stampLen+1 || stem[stampLen] != '-' {
+		return ""
+	}
+	return stem[stampLen+1:]
 }
 
 // loadCodexSessionTitles reads the same generated thread names that Codex uses
@@ -111,9 +166,47 @@ func loadCodexSessionTitles(codexHome string) map[string]string {
 	return titles
 }
 
+// rolloutFirstLineCwd 以最小 I/O 只读 rollout 首行，解析 session_meta 的 cwd。
+// 首行缺失、不是 session_meta 或无法解析时返回 ok=false，交给完整解析路径兜底。
+func rolloutFirstLineCwd(path string) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	return rolloutMetaCwd(bufio.NewReaderSize(f, 8*1024))
+}
+
+// rolloutMetaCwd 从流中读取首行并解析 session_meta.cwd。传入小缓冲 Reader，
+// 让不相关的 rollout 只需付出一次小块读的开销。
+func rolloutMetaCwd(r *bufio.Reader) (string, bool) {
+	line, err := r.ReadString('\n')
+	if err != nil && line == "" {
+		return "", false
+	}
+	var entry struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Cwd string `json:"cwd"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal([]byte(line), &entry) != nil || entry.Type != "session_meta" {
+		return "", false
+	}
+	return entry.Payload.Cwd, true
+}
+
 // parseCodexSessionFile reads a Codex JSONL transcript.
 // Returns nil if the session's cwd doesn't match filterCwd.
 func parseCodexSessionFile(path, filterCwd string) *core.AgentSessionInfo {
+	// 快路径：归属只看首行 session_meta。cwd 明确且不匹配时立即返回，
+	// 连 transcript 正文都不读（上游 PR #1554 的提前退出思路，这里把 I/O 也一并省掉）。
+	if filterCwd != "" {
+		if cwd, ok := rolloutFirstLineCwd(path); ok && cwd != "" && cwd != filterCwd {
+			return nil
+		}
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -228,8 +321,17 @@ func isSubagentSessionSource(source json.RawMessage) bool {
 }
 
 // findSessionFile locates the JSONL transcript for a given session ID.
+// 先用 Glob 精确命中（与 context_usage.go 的 findSessionFileInCodexHome 同法），
+// 未命中再回退全目录遍历。
 func findSessionFile(sessionID, codexHome string) string {
 	sessionsDir := filepath.Join(resolveCodexHomeDir(codexHome), "sessions")
+	if id := strings.TrimSpace(sessionID); id != "" && !strings.ContainsAny(id, `*?[`) {
+		pattern := filepath.Join(sessionsDir, "*", "*", "*", "rollout-*"+id+".jsonl")
+		if matches, _ := filepath.Glob(pattern); len(matches) > 0 {
+			sort.Strings(matches) // 与旧的遍历顺序一致：取最早的一个
+			return matches[0]
+		}
+	}
 
 	var found string
 	_ = filepath.Walk(sessionsDir, func(path string, info os.FileInfo, err error) error {
@@ -331,7 +433,12 @@ func patchSessionSource(sessionID, codexHome string) {
 	if path == "" {
 		return
 	}
+	patchSessionSourceFile(path)
+}
 
+// patchSessionSourceFile 对已知路径的 rollout 回写 session_meta 首行。
+// 与 patchSessionSource 的区别是不再查找文件，供会话列举的索引路径直接调用。
+func patchSessionSourceFile(path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return
