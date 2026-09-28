@@ -170,9 +170,9 @@ func (e *Engine) notifyAttentionWithMention(p Platform, replyCtx any, userID, us
 	if !mentionUser {
 		userID, userName = "", ""
 	} else if isSyntheticAttentionUserID(userID) {
-		// 定时任务/心跳回合没有真实发送者。占位身份会让平台拒绝发送并丢弃
-		// 整条提醒，改从会话键解析会话归属人；解析不出（共享会话、线程键）
-		// 时维持原样，由平台按既有策略处理。
+		// 定时任务/心跳/webhook 等合成回合没有真实发送者。占位身份会让平台
+		// 拒绝发送并丢弃整条提醒，改从会话键解析会话归属人；解析不出
+		// （共享会话、线程键）时维持原样，由平台按既有策略处理。
 		if ownerID, ownerName, ok := resolveAttentionOwner(p, replyCtx); ok {
 			userID, userName = ownerID, ownerName
 		}
@@ -207,11 +207,13 @@ func (e *Engine) notifyAttentionWithMention(p Platform, replyCtx any, userID, us
 }
 
 // isSyntheticAttentionUserID reports whether the mention target is the
-// placeholder identity of a synthetic turn (timer, heartbeat) rather than a
-// real user. An empty identity counts as unusable for the same reason.
+// placeholder identity of a synthetic turn (timer, cron, heartbeat, webhook,
+// web-admin) rather than a real user. An empty identity counts as unusable for
+// the same reason.
 func isSyntheticAttentionUserID(id string) bool {
 	switch strings.TrimSpace(id) {
-	case "", syntheticTimerUserID, syntheticHeartbeatUserID:
+	case "", syntheticTimerUserID, syntheticCronUserID, syntheticHeartbeatUserID,
+		syntheticWebhookUserID, syntheticWebAdminUserID:
 		return true
 	default:
 		return false

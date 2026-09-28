@@ -1018,7 +1018,7 @@ func (a *bridgeAdapter) dispatchAsMessage(ref *bridgeEngineRef, sessionKey, repl
 	msg := &Message{
 		SessionKey: sessionKey,
 		Platform:   a.platform,
-		UserID:     "web-admin",
+		UserID:     syntheticWebAdminUserID,
 		UserName:   "Web Admin",
 		Content:    content,
 		ReplyCtx:   newBridgeReplyCtx(a, sessionKey, replyCtx),
@@ -1039,7 +1039,7 @@ func (a *bridgeAdapter) dispatchAsPermissionResponse(ref *bridgeEngineRef, sessi
 	msg := &Message{
 		SessionKey:           sessionKey,
 		Platform:             a.platform,
-		UserID:               "web-admin",
+		UserID:               syntheticWebAdminUserID,
 		UserName:             "Web Admin",
 		Content:              content,
 		ReplyCtx:             newBridgeReplyCtx(a, sessionKey, replyCtx),
