@@ -382,6 +382,14 @@ func (cs *codexSession) handleEvent(raw map[string]any) {
 			cs.contextUsage = nil
 			cs.contextMu.Unlock()
 			slog.Debug("codexSession: thread started", "thread_id", tid)
+			// 立刻把线程 ID 上报给引擎落盘：该轮稍后失败（如限流）时手里若没有
+			// ID，下一轮会开新会话、丢掉整段上下文，用户只看到“莫名换了会话”。
+			evt := core.Event{Type: core.EventSessionStarted, SessionID: tid}
+			select {
+			case cs.events <- evt:
+			case <-cs.ctx.Done():
+				return
+			}
 		}
 
 	case "turn.started":

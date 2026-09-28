@@ -5921,6 +5921,19 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				idleTimer.Reset(e.eventIdleTimeout)
 			}
 
+		case EventSessionStarted:
+			// agent 在回合结束前就确定了会话 ID（Codex 的 thread.started 即此）。
+			// 立即落盘：该轮随后若失败，引擎手里仍握着可续接的 ID，下一轮会接着
+			// 原会话，而不是静默开新会话把整段上下文丢光。与 EventResult 一致，
+			// 优先用 agent 侧当前 ID，因为事件里的 SessionID 可能为空。
+			id := event.SessionID
+			if state != nil && state.agentSession != nil {
+				if currentID := state.agentSession.CurrentSessionID(); currentID != "" {
+					id = currentID
+				}
+			}
+			persistAgentSessionID(session, sessions, id, e.agent.Name())
+
 		case EventResult:
 			// Non-terminal result events (e.g. mid-turn compaction: Claude
 			// Code's auto-context-compact emits type:"result" with
@@ -6477,6 +6490,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Lock()
 			state.eventsNeedResync = true
 			state.mu.Unlock()
+			// 失败也要落盘：Codex 之类的 agent 在回合失败后仍保留可续接的线程，
+			// 此处若不落盘，下一轮就变成新会话，用户以为上下文还在。用户主动停止
+			// （/stop、/cancel）不算故障，且这些命令会刻意清掉 ID，不能写回去。
+			if state.agentSession != nil && !errors.Is(event.Error, context.Canceled) {
+				persistAgentSessionID(session, sessions, state.agentSession.CurrentSessionID(), e.agent.Name())
+			}
 			if hasRichCard && cardMessageID != nil {
 				errCard := buildResolvedRichCard(CardStatusError, "", toolSteps, partialText, false, e.composeRichStatusFooter(false, turnStart, e.agent, state.agentSession, state.workspaceDir))
 				if updater, ok := p.(MessageUpdater); ok {
@@ -6501,7 +6520,13 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						break
 					}
 				}
-				e.send(p, replyCtx, userMsg)
+				// 失败回执：如实说明下一条消息的去向。此前这里只说“出错了”，
+				// 会话其实已经被换掉，用户毫不知情——正是 P1 要治的静默换会话。
+				hintKey := MsgErrorResumeNext
+				if session.GetAgentSessionID() == "" || agentErrorIsUnrecoverable(errMsg) {
+					hintKey = MsgErrorFreshNext
+				}
+				e.send(p, replyCtx, userMsg+"\n"+e.i18n.T(hintKey))
 			}
 			// Only drop queued messages if the agent session is dead.
 			// Some agents (e.g. Codex) emit EventError for per-turn failures
@@ -7366,6 +7391,40 @@ func (e *Engine) listAgentSessions(agent Agent) ([]AgentSessionInfo, error) {
 	ctx, cancel := context.WithTimeout(e.ctx, sessionListTimeout)
 	defer cancel()
 	return agent.ListSessions(ctx)
+}
+
+// persistAgentSessionID 把 agent 侧会话 ID 落盘，并在首次绑定时同步会话名。
+// 写入 + 首次命名 + 立即保存这三步必须成套出现：少任何一步都会在“进程重启后
+// 续接”或“失败后下一轮”这两条路径上退化成静默开新会话（P1 的故障形态）。
+func persistAgentSessionID(session *Session, sessions *SessionManager, id, agentName string) {
+	if id == "" || session.GetAgentSessionID() == id {
+		return
+	}
+	wasEmpty := session.GetAgentSessionID() == ""
+	session.SetAgentSessionID(id, agentName)
+	if wasEmpty {
+		if pendingName := session.GetName(); pendingName != "" && pendingName != "session" && pendingName != "default" {
+			sessions.SetSessionName(id, pendingName)
+		}
+	}
+	sessions.Save()
+}
+
+// agentUnrecoverableErrorMarkers 是“该会话已无法续接”的错误特征。命中后下一轮
+// 必然开新会话，失败回执要如实说明，不能还让用户以为上下文接着用。
+var agentUnrecoverableErrorMarkers = []string{
+	"Session not found",
+	"unrecognized_model",
+}
+
+// agentErrorIsUnrecoverable 判断错误是否表明当前会话已不可续接。
+func agentErrorIsUnrecoverable(errMsg string) bool {
+	for _, marker := range agentUnrecoverableErrorMarkers {
+		if strings.Contains(errMsg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) cmdList(p Platform, msg *Message, args []string) {

@@ -216,6 +216,8 @@ const (
 	MsgToolAllowFailed           MsgKey = "tool_allow_failed"
 	MsgToolAllowedNew            MsgKey = "tool_allowed_new"
 	MsgError                     MsgKey = "error"
+	MsgErrorResumeNext           MsgKey = "error_resume_next"
+	MsgErrorFreshNext            MsgKey = "error_fresh_next"
 	MsgSessionNotFound           MsgKey = "session_not_found"
 	MsgFailedToStartAgentSession MsgKey = "failed_to_start_agent_session"
 	MsgFailedToDeleteSession     MsgKey = "failed_to_delete_session"
@@ -874,6 +876,20 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "❌ 錯誤: %v",
 		LangJapanese:           "❌ エラー: %v",
 		LangSpanish:            "❌ Error: %v",
+	},
+	MsgErrorResumeNext: {
+		LangEnglish:            "🔁 Your next message will continue this same session; if it cannot be resumed, a new session will start automatically.",
+		LangChinese:            "🔁 下一条消息会接着本会话继续；若续接不上，会自动开启新会话。",
+		LangTraditionalChinese: "🔁 下一則訊息會接著本會話繼續；若續接不上，會自動開啟新會話。",
+		LangJapanese:           "🔁 次のメッセージはこのセッションを継続します。再開できない場合は自動的に新しいセッションを開始します。",
+		LangSpanish:            "🔁 Tu próximo mensaje continuará en esta misma sesión; si no se puede reanudar, se iniciará una nueva automáticamente.",
+	},
+	MsgErrorFreshNext: {
+		LangEnglish:            "🆕 This session is no longer resumable, so your next message will start a new session automatically.",
+		LangChinese:            "🆕 该会话已无法续接，下一条消息会自动开启新会话。",
+		LangTraditionalChinese: "🆕 該會話已無法續接，下一則訊息會自動開啟新會話。",
+		LangJapanese:           "🆕 このセッションは再開できないため、次のメッセージで自動的に新しいセッションを開始します。",
+		LangSpanish:            "🆕 Esta sesión ya no se puede reanudar, así que tu próximo mensaje iniciará una nueva sesión automáticamente.",
 	},
 	MsgBackgroundAutoDenied: {
 		LangEnglish:            "⚠️ Background task requested permission for `%s` but was auto-denied (no active user turn). Send a message or use `/yolo` to approve future requests.",

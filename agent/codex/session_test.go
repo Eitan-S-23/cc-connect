@@ -1091,3 +1091,30 @@ func waitForFileLines(t *testing.T, path string, want int) {
 	}
 	t.Fatalf("timed out waiting for %d lines in %s", want, path)
 }
+
+// thread.started 必须立刻把线程 ID 上报给引擎：该轮稍后若失败（限流等），
+// 引擎手里仍有可续接的 ID，下一轮才不会静默开新会话、丢掉整段上下文。
+func TestHandleEvent_ThreadStartedReportsSessionID(t *testing.T) {
+	cs, err := newCodexSession(context.Background(), "codex", nil, "/tmp/project", "", "", "", "", "", nil, "", "", "")
+	if err != nil {
+		t.Fatalf("newCodexSession: %v", err)
+	}
+	defer cs.Close()
+
+	cs.handleEvent(map[string]any{"type": "thread.started", "thread_id": "thread-report"})
+
+	select {
+	case evt := <-cs.Events():
+		if evt.Type != core.EventSessionStarted {
+			t.Fatalf("事件类型 = %s, 期望 %s", evt.Type, core.EventSessionStarted)
+		}
+		if evt.SessionID != "thread-report" {
+			t.Fatalf("事件会话 ID = %q, 期望 thread-report", evt.SessionID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("thread.started 没有上报会话 ID")
+	}
+	if got := cs.CurrentSessionID(); got != "thread-report" {
+		t.Fatalf("CurrentSessionID() = %q, 期望 thread-report", got)
+	}
+}

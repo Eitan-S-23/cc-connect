@@ -457,6 +457,10 @@ const (
 	EventError             EventType = "error"              // error occurred
 	EventPermissionRequest EventType = "permission_request" // agent requests permission via stdio protocol
 	EventThinking          EventType = "thinking"           // thinking/processing status
+	// EventSessionStarted 表示 agent 侧的会话/线程 ID 已经确定，且早于回合结束。
+	// 引擎收到后立即落盘，这样即使该回合随后失败（限流、进程被杀），下一轮
+	// 也能续接同一会话，而不是拿着一片空白静默开启新会话。
+	EventSessionStarted EventType = "session_started"
 )
 
 // UserQuestion represents a structured question from AskUserQuestion.
