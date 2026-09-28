@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -166,7 +167,7 @@ func setupFilterSessionTest(t *testing.T, agentType string, filterEnabled bool) 
 		t.Skipf("skip: cannot create %s agent: %v", agentType, err)
 	}
 
-	listed, err := agent.ListSessions(nil)
+	listed, err := agent.ListSessions(context.Background())
 	if err != nil {
 		t.Fatalf("agent.ListSessions failed: %v", err)
 	}
