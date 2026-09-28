@@ -882,6 +882,32 @@ func (cs *claudeSession) handleResult(raw map[string]any) {
 		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     cacheReadTokens,
 	}
+	isError, _ := raw["is_error"].(bool)
+	subtype := resultSubtype(raw)
+	if !isCompaction && (isError || subtype == "error" || strings.HasPrefix(subtype, "error_")) {
+		// A result envelope can be a failed turn, including budget/turn limits
+		// and provider errors with no HTTP status. Never announce it as success.
+		detail := strings.TrimSpace(content)
+		if failures, ok := raw["errors"].([]any); ok {
+			var parts []string
+			for _, failure := range failures {
+				if text, ok := failure.(string); ok && strings.TrimSpace(text) != "" {
+					parts = append(parts, strings.TrimSpace(text))
+				}
+			}
+			if len(parts) > 0 {
+				detail = strings.Join(parts, "; ")
+			}
+		}
+		if detail == "" {
+			detail = subtype
+		}
+		if detail == "" {
+			detail = "turn failed (no details)"
+		}
+		evt.Type = core.EventError
+		evt.Error = fmt.Errorf("%s", detail)
+	}
 	select {
 	case cs.events <- evt:
 	case <-cs.ctx.Done():

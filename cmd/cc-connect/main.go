@@ -635,6 +635,36 @@ func main() {
 			})
 		}
 
+		// Wire the "the agent needs you" alert. Unset sub-options keep the
+		// documented defaults (all triggers on, mention on) so a config that
+		// only flips enabled = true behaves as the reference docs describe.
+		if cfg.AttentionNotify.Enabled != nil && *cfg.AttentionNotify.Enabled {
+			an := core.AttentionNotifyCfg{
+				Enabled:        true,
+				OnTurnComplete: true,
+				OnBlocked:      true,
+				OnError:        true,
+				MentionUser:    true,
+				Content:        cfg.AttentionNotify.Content,
+			}
+			if cfg.AttentionNotify.OnTurnComplete != nil {
+				an.OnTurnComplete = *cfg.AttentionNotify.OnTurnComplete
+			}
+			if cfg.AttentionNotify.OnBlocked != nil {
+				an.OnBlocked = *cfg.AttentionNotify.OnBlocked
+			}
+			if cfg.AttentionNotify.OnError != nil {
+				an.OnError = *cfg.AttentionNotify.OnError
+			}
+			if cfg.AttentionNotify.MentionUser != nil {
+				an.MentionUser = *cfg.AttentionNotify.MentionUser
+			}
+			if cfg.AttentionNotify.MinDurationSecs != nil && *cfg.AttentionNotify.MinDurationSecs > 0 {
+				an.MinDuration = time.Duration(*cfg.AttentionNotify.MinDurationSecs) * time.Second
+			}
+			engine.SetAttentionNotify(an)
+		}
+
 		// Wire rate limiting
 		{
 			maxMsg := 20

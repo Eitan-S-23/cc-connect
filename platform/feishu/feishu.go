@@ -150,18 +150,18 @@ type Platform struct {
 	// Issue #1618: previous behavior treated botOpenID=="" as "filter off", which
 	// silently turned the bot into a loud responder for the rest of the process
 	// lifetime when the bot-info API failed.
-	groupFilterDegraded     bool
-	groupFilterDegradedAt   time.Time
-	groupFilterDegradedErr  string
-	groupFilterRetryCancel  context.CancelFunc
-	groupFilterRetryStop    chan struct{}
-	peerBots                map[string]string // app_id -> friendly alias, for quoted-reply attribution
-	mentionMap       map[string]string // agent name -> open_id (for outbound @ resolution)
-	userNameCache    sync.Map          // open_id -> display name
-	chatNameCache    sync.Map          // chat_id -> chat name
-	chatMemberCache  sync.Map          // chatID -> *chatMemberEntry
-	recalledMu       sync.Mutex
-	recalledMsgIDs   map[string]time.Time // message_id -> recall time, short TTL race guard
+	groupFilterDegraded    bool
+	groupFilterDegradedAt  time.Time
+	groupFilterDegradedErr string
+	groupFilterRetryCancel context.CancelFunc
+	groupFilterRetryStop   chan struct{}
+	peerBots               map[string]string // app_id -> friendly alias, for quoted-reply attribution
+	mentionMap             map[string]string // agent name -> open_id (for outbound @ resolution)
+	userNameCache          sync.Map          // open_id -> display name
+	chatNameCache          sync.Map          // chat_id -> chat name
+	chatMemberCache        sync.Map          // chatID -> *chatMemberEntry
+	recalledMu             sync.Mutex
+	recalledMsgIDs         map[string]time.Time // message_id -> recall time, short TTL race guard
 	// Webhook mode fields (for Lark international version)
 	server       *http.Server
 	port         string
@@ -299,6 +299,7 @@ type imageBatchEntry struct {
 
 // compile-time interface assertions
 var _ core.RelayGroupVisibilityTarget = (*Platform)(nil)
+var _ core.AttentionNotifier = (*Platform)(nil)
 
 type interactivePlatform struct {
 	*Platform
@@ -1045,6 +1046,51 @@ func (p *Platform) AddDoneReaction(rctx any) {
 		return
 	}
 	go p.addReactionWithEmoji(rc.messageID, p.doneEmoji)
+}
+
+// ResolveAttentionRecipient recovers the owner of a user-scoped session.
+// Shared-chat and thread keys do not identify one user and must not be guessed.
+func (p *Platform) ResolveAttentionRecipient(rctx any) (string, string, error) {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return "", "", fmt.Errorf("%s: invalid attention reply context", p.tag())
+	}
+	parts := strings.SplitN(rc.sessionKey, ":", 3)
+	if len(parts) != 3 || parts[0] != p.platformName || parts[1] != rc.chatID {
+		return "", "", fmt.Errorf("%s: no unambiguous attention recipient", p.tag())
+	}
+	userID := parts[2]
+	if len(userID) <= len("ou_") || !strings.HasPrefix(userID, "ou_") || !isValidFeishuLookupID(userID) {
+		return "", "", fmt.Errorf("%s: no valid attention recipient open_id", p.tag())
+	}
+	return userID, "", nil
+}
+
+// NotifyAttention implements core.AttentionNotifier.
+//
+// Send an independent text message to the original chat. Reply and card paths
+// may display an at tag without delivering a mention notification.
+//
+// Do not silently send a plain message if the sender has no valid open_id:
+// that would appear successful even when mention-only alerts cannot fire.
+func (p *Platform) NotifyAttention(ctx context.Context, rctx any, userID, userName, text string) error {
+	rc, ok := rctx.(replyContext)
+	if !ok {
+		return fmt.Errorf("%s: invalid reply context type %T", p.tag(), rctx)
+	}
+	if len(userID) <= len("ou_") || !strings.HasPrefix(userID, "ou_") || !isValidFeishuLookupID(userID) {
+		return fmt.Errorf("%s: cannot mention sender without a valid open_id", p.tag())
+	}
+	name := strings.TrimSpace(userName)
+	if name == "" {
+		name = userID
+	}
+	mention := fmt.Sprintf(`<at user_id="%s">%s</at>`, html.EscapeString(userID), html.EscapeString(name))
+	body, err := json.Marshal(map[string]string{"text": mention + " " + text})
+	if err != nil {
+		return fmt.Errorf("%s: encode attention message: %w", p.tag(), err)
+	}
+	return p.sendNewMessageToChat(ctx, rc, larkim.MsgTypeText, string(body))
 }
 
 const recalledMessageTTL = 10 * time.Minute

@@ -263,6 +263,42 @@ level = "info" # debug, info, warn, error
 #                            # 自定义回复内容；留空则使用 i18n 默认值（"⏳ 处理中..."）
 
 # =============================================================================
+# Attention Notify / 「Agent 需要你」提醒
+# =============================================================================
+# Send one extra short message when an agent turn finishes, or when the agent
+# blocks on a human decision (permission request / question). The message
+# carries a real @mention so the user's device rings.
+#
+# Why this exists: some platforms never push a notification for the messages
+# cc-connect normally relies on. Feishu pushes only for a newly created message
+# that really mentions the user — streaming card edits and reaction emoji stay
+# silent. Users who filter Feishu notifications to "@ me only" therefore never
+# learn that the agent finished or got stuck.
+#
+# The whole section is off by default; existing deployments are unaffected
+# until they opt in.
+# 当 Agent 完成一轮工作、或卡在需要人工决策的地方（权限请求 / 提问）时，额外补发
+# 一条短消息，消息里带一个真正生效的 @提及，让用户设备响铃。
+# 存在的原因：部分平台对 cc-connect 现有的完成信号是静默的。飞书只在「新建消息」
+# 且该消息真正 @ 到用户时才推送；流式卡片的增量更新和 reaction 表情都不推送。
+# 用户若把飞书通知筛选为「仅 @ 我的消息」，就完全不知道 Agent 已经答完或卡住了。
+# 整个配置段默认关闭，不影响任何既有部署。
+
+# [attention_notify]
+# enabled = false            # Master switch (default: false) / 总开关（默认 false）
+# on_turn_complete = true    # Alert after a turn finishes (default: true when enabled) / 完成一轮后提醒（默认 true）
+# on_blocked = true          # Alert while the agent waits for permission/answer (default: true) / 阻塞等人工时提醒（默认 true）
+# on_error = true            # Alert on any failed turn, failed start/send, timeout or interruption (default: true)
+#                           # Not an HTTP status allowlist; retrying requests and recoverable tool errors do not alert.
+# mention_user = true        # @-mention the sender; required for the push to fire on Feishu
+#                            # @ 发送者；飞书上必须开启才能触发推送（默认 true）
+# content = ""               # Turn-complete body; empty = i18n default / 完成提醒文案；留空用 i18n 默认值
+# min_duration_secs = 0      # Skip turn-complete alerts for shorter turns; 0 = alert on every turn
+#                            # 短于该秒数的回合不提醒；0 表示每轮都提醒
+# Errors and requests for human input bypass min_duration_secs. Alerts never repeat raw provider errors.
+# See docs/attention-notify.md for event coverage, cancellation and delivery limitations.
+
+# =============================================================================
 # Rate Limiting / 速率限制
 # =============================================================================
 # Per-session sliding-window rate limiter. Prevents users from flooding the bot

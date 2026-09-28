@@ -228,6 +228,27 @@ type AtMentionSender interface {
 	ReplyWithAt(ctx context.Context, replyCtx any, content string, atUsers []string, atAll bool) error
 }
 
+// AttentionNotifier is an optional interface for platforms whose normal reply
+// path does not reach the user's device as a notification. Feishu is the
+// motivating case: it pushes only for a newly created message that really
+// mentions the user, so streaming card edits and reaction emoji stay silent
+// even when the app is backgrounded.
+//
+// Implementations send a short standalone message that carries a real mention
+// of userID, so the alert triggers a push. userID is a platform-native
+// identifier (for Feishu, the sender's open_id); an empty userID means the
+// caller wants the alert without a mention, and the implementation should fall
+// back to a plain send.
+type AttentionNotifier interface {
+	NotifyAttention(ctx context.Context, replyCtx any, userID, userName, text string) error
+}
+
+// AttentionRecipientResolver identifies an unambiguous recipient for a
+// proactive notification. It must not guess a user in shared conversations.
+type AttentionRecipientResolver interface {
+	ResolveAttentionRecipient(replyCtx any) (userID, userName string, err error)
+}
+
 // ImageSender is an optional interface for platforms that support sending images.
 type ImageSender interface {
 	SendImage(ctx context.Context, replyCtx any, img ImageAttachment) error

@@ -1127,6 +1127,7 @@ func TestCUJ_A3_ImageReachesAgent(t *testing.T) {
 	agent := &cujAgent{}
 	dir := t.TempDir()
 	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json", LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
 
 	msg := &Message{
 		SessionKey: "test:img", Platform: "test", MessageID: "img1",
@@ -1142,7 +1143,7 @@ func TestCUJ_A3_ImageReachesAgent(t *testing.T) {
 		agent.mu.Lock()
 		n := len(agent.sessions)
 		agent.mu.Unlock()
-		if n > 0 {
+		if n > 0 && !e.sessions.GetOrCreateActive(msg.SessionKey).Busy() {
 			break
 		}
 		select {
@@ -1191,6 +1192,7 @@ func TestCUJ_A5_FileReachesAgent(t *testing.T) {
 	agent := &cujAgent{}
 	dir := t.TempDir()
 	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json", LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
 
 	msg := &Message{
 		SessionKey: "test:file", Platform: "test", MessageID: "f1",
@@ -1206,7 +1208,7 @@ func TestCUJ_A5_FileReachesAgent(t *testing.T) {
 		agent.mu.Lock()
 		n := len(agent.sessions)
 		agent.mu.Unlock()
-		if n > 0 {
+		if n > 0 && !e.sessions.GetOrCreateActive(msg.SessionKey).Busy() {
 			return
 		}
 		select {
@@ -1539,7 +1541,9 @@ func TestCUJ_D6_InboundRateLimitDrops(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		env.userSends("d6", "burst "+string(rune('0'+i)))
 	}
-	time.Sleep(300 * time.Millisecond)
+	env.waitFor("rate-limited burst drained", 3*time.Second, func() bool {
+		return !env.activeSession("test:d6").Busy()
+	})
 
 	env.agent.mu.Lock()
 	n := len(env.agent.sessions)
@@ -2420,5 +2424,200 @@ func TestCUJ_H4_FeishuTopicsKeepWorkspaceBindingsIsolated(t *testing.T) {
 	sendTopicCommand("om_root_b", "/workspace")
 	if got := lastReply(); !strings.Contains(got, normalizeWorkspacePath(workspaceB)) {
 		t.Fatalf("topic B changed after topic A unbind: %q", got)
+	}
+}
+
+// ===========================================================================
+// CUJ-J1 · 提醒闭环（attention notify）
+//
+// SPOTLIGHT: 🟡 用户把手机飞书设置为「仅 @ 我的消息提醒」后，Agent 答完和 Agent
+// 卡住等人工确认这两个时刻在设备上都是静默的（流式卡片更新和 reaction 都不推送）。
+// 本 CUJ 锁定用户视角的完整契约：这两个时刻必须各补发一条带 @提及的提醒，并且
+// 提醒不能顶替原有的回复与权限卡片。
+// ===========================================================================
+
+func TestCUJ_J1_AttentionNotifyReachesUserOnCompleteAndBlock(t *testing.T) {
+	plat := &attentionRecordingPlatform{stubPlatformEngine: stubPlatformEngine{n: "test"}}
+	agent := &cujAgent{}
+	dir := t.TempDir()
+	e := NewEngine("test", agent, []Platform{plat}, dir+"/sessions.json", LangChinese)
+	e.SetAttentionNotify(AttentionNotifyCfg{
+		Enabled:        true,
+		OnTurnComplete: true,
+		OnBlocked:      true,
+		MentionUser:    true,
+	})
+
+	const key = "test:ivan"
+	send := func(msgID, content string) {
+		e.ReceiveMessage(plat, &Message{
+			SessionKey: key, Platform: "test", MessageID: msgID,
+			UserID: "ou_ivan", UserName: "Ivan", Content: content, ReplyCtx: "ctx-ivan",
+		})
+	}
+	wantNotifications := func(n int, reason string) []attentionCall {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if got := plat.getNotifications(); len(got) >= n {
+				return got
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("等待 %s 超时：提醒条数 = %d, want %d（已发送消息: %v）",
+			reason, len(plat.getNotifications()), n, plat.getSent())
+		return nil
+	}
+
+	// 用户动作 1：发出第一个任务，Agent 直接答完。
+	send("m1", "帮我看看这个 bug")
+	wantNotifications(1, "第一轮完成提醒")
+	if got := plat.getSent(); len(got) == 0 {
+		t.Fatal("用户没看到 Agent 的回答")
+	}
+	first := wantNotifications(1, "第一轮完成提醒")[0]
+	if first.userID != "ou_ivan" {
+		t.Fatalf("完成提醒的 @对象 = %q, want %q", first.userID, "ou_ivan")
+	}
+	if !strings.Contains(first.text, "完成") {
+		t.Fatalf("第一条提醒不是完成提醒: %q", first.text)
+	}
+
+	// 用户动作 2：再交一个需要执行工具的任务，Agent 请求权限后卡住。
+	agent.mu.Lock()
+	if len(agent.sessions) == 0 {
+		agent.mu.Unlock()
+		t.Fatal("Agent 未创建会话")
+	}
+	sess := agent.sessions[0]
+	agent.mu.Unlock()
+	sess.mu.Lock()
+	sess.pendingEvents = []Event{
+		{Type: EventPermissionRequest, RequestID: "req-rm", ToolName: "Bash"},
+		{Type: EventResult, Content: "已处理", Done: true},
+	}
+	sess.mu.Unlock()
+	send("m2", "删掉临时目录")
+
+	blocked := wantNotifications(2, "阻塞提醒")[1]
+	if blocked.userID != "ou_ivan" {
+		t.Fatalf("阻塞提醒的 @对象 = %q, want %q", blocked.userID, "ou_ivan")
+	}
+	if !strings.Contains(blocked.text, "Bash") {
+		t.Fatalf("阻塞提醒未说明待授权工具: %q", blocked.text)
+	}
+	if sent := plat.getSent(); !containsAny(sent, "Bash") {
+		t.Fatalf("用户没看到权限确认卡片, 已发送: %v", sent)
+	}
+
+	// 用户动作 3：回复 allow 放行，Agent 继续跑完这一轮。
+	plat.clearSent()
+	send("m3", "allow")
+
+	got := wantNotifications(3, "放行后的完成提醒")
+	if !strings.Contains(got[2].text, "完成") {
+		t.Fatalf("放行后应再收到完成提醒, got %q", got[2].text)
+	}
+	if got[2].userID != "ou_ivan" {
+		t.Fatalf("放行后完成提醒的 @对象 = %q, want %q", got[2].userID, "ou_ivan")
+	}
+	if sent := plat.getSent(); !containsAny(sent, "已处理") {
+		t.Fatalf("放行后用户没看到 Agent 的后续回答, 已发送: %v", sent)
+	}
+}
+
+func TestCUJ_J1_HeartbeatCompletionOnlyPreservesUserAlerts(t *testing.T) {
+	s := newAttentionControlledSession()
+	e, p := newHeartbeatAttentionEngine(t, &attentionControlledAgent{session: s})
+	hs := NewHeartbeatScheduler(t.TempDir())
+	hs.Register(e.name, HeartbeatConfig{
+		Enabled: true, SessionKey: "test:attention", Prompt: "Finish pending work.", Silent: true,
+	}, e, t.TempDir())
+	e.SetHeartbeatScheduler(hs)
+	t.Cleanup(hs.Stop)
+	send := func(id, content string) {
+		e.ReceiveMessage(p, &Message{
+			SessionKey: "test:attention", Platform: "test", MessageID: id,
+			UserID: "ou_owner", Content: content, ReplyCtx: "test:attention",
+		})
+	}
+
+	// Action 1: trigger a heartbeat and receive an unmentioned permission prompt.
+	send("trigger", "/heartbeat run")
+	waitAttentionSend(t, s, "")
+	s.events <- Event{Type: EventPermissionRequest, RequestID: "approval", ToolName: "Bash"}
+	waitHeartbeatQuestion(t, e)
+	waitHeartbeatPlainNotice(t, p, e.attentionBlockedPermissionText("Bash"))
+	if got := p.getNotifications(); len(got) != 0 {
+		t.Fatalf("heartbeat permission prompt mentioned the user: %+v", got)
+	}
+
+	// Action 2: approve, then see one completion mention after work finishes.
+	send("approve", "allow")
+	s.events <- Event{Type: EventResult, Done: true, Content: "Change delivered."}
+	got := waitForAttention(t, &p.attentionRecordingPlatform, 1)
+	if len(got) != 1 || got[0].userID != "ou_owner" {
+		t.Fatalf("missing heartbeat completion mention: %+v", got)
+	}
+	waitAttentionIdle(t, e)
+	if !containsAny(p.getSent(), "Change delivered.") {
+		t.Fatal("completion alert replaced the normal result")
+	}
+
+	// Action 3: a manually requested task still mentions the user on failure.
+	send("manual", "Run the next task.")
+	waitAttentionSend(t, s, "manual")
+	s.events <- Event{Type: EventError, Error: errors.New("manual task failed")}
+	waitAttentionIdle(t, e)
+	got = p.getNotifications()
+	if len(got) != 2 || got[1].userID != "ou_owner" || !containsAny(p.getSent(), "manual task failed") {
+		t.Fatalf("ordinary user error handling regressed: %+v; replies=%v", got, p.getSent())
+	}
+}
+
+// containsAny 报告列表中是否有一条消息包含 needle。
+func containsAny(list []string, needle string) bool {
+	for _, s := range list {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestCUJ_AN1_QueuedFailureAndRecoveryMentionsEachSender(t *testing.T) {
+	s := newAttentionControlledSession()
+	e, p := newFailureAttentionEngine(t, &attentionControlledAgent{session: s})
+
+	// Alice starts work; Bob queues a separate turn in the same conversation.
+	sendAttentionMessage(e, p, "alice-message", "ou_alice")
+	waitAttentionSend(t, s, "alice-message")
+	sendAttentionMessage(e, p, "bob-message", "ou_bob")
+	s.events <- Event{Type: EventResult, Done: true, Content: "Alice's result"}
+	waitAttentionSend(t, s, "bob-message")
+	s.events <- Event{Type: EventError, Error: errors.New("provider disconnected")}
+	waitAttentionIdle(t, e)
+
+	// A third user retries successfully after Bob's failed turn.
+	sendAttentionMessage(e, p, "carol-message", "ou_carol")
+	waitAttentionSend(t, s, "carol-message")
+	s.events <- Event{Type: EventResult, Done: true, Content: "Carol's result"}
+	waitAttentionIdle(t, e)
+
+	got := p.getNotifications()
+	if len(got) != 3 {
+		t.Fatalf("notifications = %+v, want one per turn", got)
+	}
+	for i, want := range []struct {
+		user, message string
+		kind          MsgKey
+	}{
+		{"ou_alice", "alice-message", MsgAttentionTurnComplete},
+		{"ou_bob", "bob-message", MsgAttentionTurnFailed},
+		{"ou_carol", "carol-message", MsgAttentionTurnComplete},
+	} {
+		if got[i].userID != want.user || got[i].replyCtx != want.message || got[i].text != e.i18n.T(want.kind) {
+			t.Fatalf("turn %d notified the wrong user/thread/status: %+v, want %+v", i, got[i], want)
+		}
 	}
 }

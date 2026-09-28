@@ -102,6 +102,7 @@ type Config struct {
 	Display            DisplayConfig           `toml:"display"`
 	StreamPreview      StreamPreviewConfig     `toml:"stream_preview"`      // real-time streaming preview
 	InstantReply       InstantReplyConfig      `toml:"instant_reply"`       // immediate confirmation reply
+	AttentionNotify    AttentionNotifyConfig   `toml:"attention_notify"`    // "the agent needs you" alert
 	RateLimit          RateLimitConfig         `toml:"rate_limit"`          // per-session rate limiting
 	OutgoingRateLimit  OutgoingRateLimitConfig `toml:"outgoing_rate_limit"` // outgoing message throttling
 	Relay              RelayConfig             `toml:"relay"`               // bot-to-bot relay behavior
@@ -219,6 +220,42 @@ type StreamPreviewConfig struct {
 type InstantReplyConfig struct {
 	Enabled *bool  `toml:"enabled"` // default false
 	Content string `toml:"content"` // custom reply text; empty = use i18n default ("⏳ Processing...")
+}
+
+// AttentionNotifyConfig controls the optional "the agent needs you" alert: one
+// extra short message sent when an agent turn finishes, or when the agent
+// blocks on a human decision (permission request / question).
+//
+// It exists for platforms whose normal reply path never reaches the user's
+// device: Feishu pushes only for a newly created message that really mentions
+// the user, so streaming card edits and reaction emoji stay silent when the
+// user filters notifications to "@ me only". The alert carries a real mention
+// so the device rings.
+//
+// The whole section is off by default; set enabled = true to opt in.
+type AttentionNotifyConfig struct {
+	Enabled *bool `toml:"enabled"` // default false
+	// OnTurnComplete alerts after a turn produced its final reply; default true
+	// (when enabled) so the user learns the agent stopped working.
+	OnTurnComplete *bool `toml:"on_turn_complete"`
+	// OnBlocked alerts when the agent waits for a permission decision or an
+	// answer; default true (when enabled).
+	OnBlocked *bool `toml:"on_blocked"`
+	// OnError alerts on failed starts, failed turns, timeouts and interruptions;
+	// default true (when enabled), regardless of the error's HTTP status.
+	OnError *bool `toml:"on_error"`
+	// MentionUser @-mentions the sender inside the alert, which is what makes
+	// the push fire on Feishu; default true (when enabled). Set false to get
+	// the alert body without a mention.
+	MentionUser *bool `toml:"mention_user"`
+	// Content overrides the turn-complete alert body; empty = i18n default.
+	// The blocked alert body is always the i18n default because it embeds the
+	// tool name.
+	Content string `toml:"content,omitempty"`
+	// MinDurationSecs skips turn-complete alerts for turns shorter than this,
+	// so quick back-and-forth exchanges stay quiet. 0 (default) alerts on every
+	// completed turn; blocked and error alerts are never skipped.
+	MinDurationSecs *int `toml:"min_duration_secs,omitempty"`
 }
 
 // RateLimitConfig controls per-session message rate limiting.

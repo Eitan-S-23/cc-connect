@@ -413,31 +413,31 @@ const (
 	MsgCronIDLabel               MsgKey = "cron_id_label"
 	MsgCronFailedSuffix          MsgKey = "cron_failed_suffix"
 
-	MsgTimerNotAvailable  MsgKey = "timer_not_available"
-	MsgTimerUsage         MsgKey = "timer_usage"
-	MsgTimerAddUsage      MsgKey = "timer_add_usage"
-	MsgTimerAdded         MsgKey = "timer_added"
-	MsgTimerAddedExec     MsgKey = "timer_added_exec"
-	MsgTimerAddExecUsage  MsgKey = "timer_addexec_usage"
-	MsgTimerEmpty         MsgKey = "timer_empty"
-	MsgTimerListTitle     MsgKey = "timer_list_title"
-	MsgTimerListFooter    MsgKey = "timer_list_footer"
-	MsgTimerDelUsage      MsgKey = "timer_del_usage"
-	MsgTimerMuteUsage     MsgKey = "timer_mute_usage"
-	MsgTimerDeleted       MsgKey = "timer_deleted"
-	MsgTimerNotFound      MsgKey = "timer_not_found"
-	MsgTimerMuted         MsgKey = "timer_muted"
-	MsgTimerUnmuted       MsgKey = "timer_unmuted"
-	MsgTimerCardHint      MsgKey = "timer_card_hint"
-	MsgTimerBtnMute       MsgKey = "timer_btn_mute"
-	MsgTimerBtnUnmute     MsgKey = "timer_btn_unmute"
-	MsgTimerBtnDelete     MsgKey = "timer_btn_delete"
-	MsgTimerIDLabel       MsgKey = "timer_id_label"
-	MsgTimerScheduledLabel MsgKey = "timer_scheduled_label"
-	MsgTimerFailedSuffix  MsgKey = "timer_failed_suffix"
-	MsgCommandsTagAgent          MsgKey = "commands_tag_agent"
-	MsgCommandsTagShell          MsgKey = "commands_tag_shell"
-	MsgUpgradeTimeoutSuffix      MsgKey = "upgrade_timeout_suffix"
+	MsgTimerNotAvailable    MsgKey = "timer_not_available"
+	MsgTimerUsage           MsgKey = "timer_usage"
+	MsgTimerAddUsage        MsgKey = "timer_add_usage"
+	MsgTimerAdded           MsgKey = "timer_added"
+	MsgTimerAddedExec       MsgKey = "timer_added_exec"
+	MsgTimerAddExecUsage    MsgKey = "timer_addexec_usage"
+	MsgTimerEmpty           MsgKey = "timer_empty"
+	MsgTimerListTitle       MsgKey = "timer_list_title"
+	MsgTimerListFooter      MsgKey = "timer_list_footer"
+	MsgTimerDelUsage        MsgKey = "timer_del_usage"
+	MsgTimerMuteUsage       MsgKey = "timer_mute_usage"
+	MsgTimerDeleted         MsgKey = "timer_deleted"
+	MsgTimerNotFound        MsgKey = "timer_not_found"
+	MsgTimerMuted           MsgKey = "timer_muted"
+	MsgTimerUnmuted         MsgKey = "timer_unmuted"
+	MsgTimerCardHint        MsgKey = "timer_card_hint"
+	MsgTimerBtnMute         MsgKey = "timer_btn_mute"
+	MsgTimerBtnUnmute       MsgKey = "timer_btn_unmute"
+	MsgTimerBtnDelete       MsgKey = "timer_btn_delete"
+	MsgTimerIDLabel         MsgKey = "timer_id_label"
+	MsgTimerScheduledLabel  MsgKey = "timer_scheduled_label"
+	MsgTimerFailedSuffix    MsgKey = "timer_failed_suffix"
+	MsgCommandsTagAgent     MsgKey = "commands_tag_agent"
+	MsgCommandsTagShell     MsgKey = "commands_tag_shell"
+	MsgUpgradeTimeoutSuffix MsgKey = "upgrade_timeout_suffix"
 
 	MsgCronScheduleLabel MsgKey = "cron_schedule_label"
 	MsgCronNextRunLabel  MsgKey = "cron_next_run_label"
@@ -682,14 +682,29 @@ const (
 	MsgWsInitLocalPathsDisabled MsgKey = "ws_init_local_paths_disabled"
 	MsgBackgroundAutoDenied     MsgKey = "background_auto_denied"
 
+	// Attention-notify alerts (optional feature). These are extra short
+	// messages sent so the user's device rings on platforms that stay silent
+	// for card edits and reactions (e.g. Feishu). See core/attention_notify.go.
+	MsgAttentionTurnComplete      MsgKey = "attention_turn_complete"
+	MsgAttentionBlockedPermission MsgKey = "attention_blocked_permission"
+	MsgAttentionBlockedQuestion   MsgKey = "attention_blocked_question"
+	MsgAttentionTurnFailed        MsgKey = "attention_turn_failed"
+	MsgAttentionStartFailed       MsgKey = "attention_start_failed"
+	MsgAttentionSendFailed        MsgKey = "attention_send_failed"
+	MsgAttentionIdleTimeout       MsgKey = "attention_idle_timeout"
+	MsgAttentionTurnTimeout       MsgKey = "attention_turn_timeout"
+	MsgAttentionProcessExited     MsgKey = "attention_process_exited"
+	MsgAttentionStopped           MsgKey = "attention_stopped"
+	MsgAttentionDeliveryFailed    MsgKey = "attention_delivery_failed"
+
 	// Agent system-prompt tool sections (Issue #1655). These are appended
 	// to the agent's own system prompt by core/interfaces.go AgentSystemPromptForLang
 	// so that operators running cc-connect with language="zh" see the
 	// send / cron / timer / relay tool documentation in their native
 	// language. Translation coverage is en + zh for this PR; additional
 	// languages fall back to en automatically.
-	MsgAgentSendToolPrompt MsgKey = "agent_send_tool_prompt"
-	MsgAgentCronToolPrompt MsgKey = "agent_cron_tool_prompt"
+	MsgAgentSendToolPrompt  MsgKey = "agent_send_tool_prompt"
+	MsgAgentCronToolPrompt  MsgKey = "agent_cron_tool_prompt"
 	MsgAgentTimerToolPrompt MsgKey = "agent_timer_tool_prompt"
 	MsgAgentRelayToolPrompt MsgKey = "agent_relay_tool_prompt"
 )
@@ -866,6 +881,83 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "⚠️ 後台任務請求使用工具 `%s` 的權限，但已自動拒絕（目前無活躍會話）。請發送訊息或使用 `/yolo` 授權後續請求。",
 		LangJapanese:           "⚠️ バックグラウンドタスクがツール `%s` の権限を要求しましたが、自動的に拒否されました（アクティブなユーザーターンなし）。メッセージを送信するか `/yolo` を使用して今後のリクエストを承認してください。",
 		LangSpanish:            "⚠️ Una tarea en segundo plano solicitó permiso para `%s` pero se denegó automáticamente (sin turno de usuario activo). Envía un mensaje o usa `/yolo` para aprobar solicitudes futuras.",
+	},
+	MsgAttentionTurnComplete: {
+		LangEnglish:            "🔔 Done — the agent finished this round of work.",
+		LangChinese:            "🔔 完成 —— Agent 已结束本轮工作。",
+		LangTraditionalChinese: "🔔 完成 —— Agent 已結束本輪工作。",
+		LangJapanese:           "🔔 完了 —— エージェントが今回の作業を終了しました。",
+		LangSpanish:            "🔔 Listo — el agente terminó esta ronda de trabajo.",
+	},
+	MsgAttentionTurnFailed: {
+		LangEnglish:            "Stopped: the agent encountered an error. Check the conversation for details.",
+		LangChinese:            "异常停止：Agent 本轮执行失败，请查看会话中的错误信息。",
+		LangTraditionalChinese: "異常停止：Agent 本輪執行失敗，請查看對話中的錯誤訊息。",
+		LangJapanese:           "停止: エージェントでエラーが発生しました。会話のエラー内容を確認してください。",
+		LangSpanish:            "Detenido: el agente encontró un error. Revisa los detalles en la conversación.",
+	},
+	MsgAttentionStartFailed: {
+		LangEnglish:            "Stopped: the agent session could not be started.",
+		LangChinese:            "启动失败：未能启动 Agent 会话，需要你检查。",
+		LangTraditionalChinese: "啟動失敗：未能啟動 Agent 工作階段，需要你檢查。",
+		LangJapanese:           "起動失敗: エージェントのセッションを開始できませんでした。",
+		LangSpanish:            "Fallo de inicio: no se pudo iniciar la sesión del agente.",
+	},
+	MsgAttentionSendFailed: {
+		LangEnglish:            "Stopped: the request could not be sent to the agent. Check the conversation for details.",
+		LangChinese:            "异常停止：请求未能发送给 Agent，请查看会话中的错误信息。",
+		LangTraditionalChinese: "異常停止：請求未能傳送給 Agent，請查看對話中的錯誤訊息。",
+		LangJapanese:           "停止: リクエストをエージェントに送信できませんでした。会話を確認してください。",
+		LangSpanish:            "Detenido: no se pudo enviar la solicitud al agente. Revisa la conversación.",
+	},
+	MsgAttentionIdleTimeout: {
+		LangEnglish:            "Timed out: the agent stopped responding and the session was terminated.",
+		LangChinese:            "超时停止：Agent 长时间没有响应，会话已终止。",
+		LangTraditionalChinese: "逾時停止：Agent 長時間沒有回應，工作階段已終止。",
+		LangJapanese:           "タイムアウト: エージェントの応答がなく、セッションを終了しました。",
+		LangSpanish:            "Tiempo de espera agotado: el agente dejó de responder y la sesión terminó.",
+	},
+	MsgAttentionTurnTimeout: {
+		LangEnglish:            "Stopping: this turn reached its maximum allowed duration.",
+		LangChinese:            "超时停止：本轮执行已达到最长运行时间，正在终止。",
+		LangTraditionalChinese: "逾時停止：本輪執行已達到最長執行時間，正在終止。",
+		LangJapanese:           "停止中: 今回の実行が最大許容時間に達しました。",
+		LangSpanish:            "Deteniendo: este turno alcanzó la duración máxima permitida.",
+	},
+	MsgAttentionProcessExited: {
+		LangEnglish:            "Stopped unexpectedly: the agent process exited before returning a final result.",
+		LangChinese:            "意外停止：Agent 进程在返回最终结果前退出了。",
+		LangTraditionalChinese: "意外停止：Agent 程序在回傳最終結果前結束了。",
+		LangJapanese:           "予期しない停止: 最終結果を返す前にエージェントのプロセスが終了しました。",
+		LangSpanish:            "Detención inesperada: el proceso del agente terminó sin devolver un resultado final.",
+	},
+	MsgAttentionStopped: {
+		LangEnglish:            "Stopped: the current agent turn was interrupted.",
+		LangChinese:            "已停止：Agent 本轮工作被中断。",
+		LangTraditionalChinese: "已停止：Agent 本輪工作被中斷。",
+		LangJapanese:           "停止: エージェントの今回の実行は中断されました。",
+		LangSpanish:            "Detenido: el turno actual del agente fue interrumpido.",
+	},
+	MsgAttentionDeliveryFailed: {
+		LangEnglish:            "The agent finished, but its final reply could not be delivered. Check the conversation or service logs.",
+		LangChinese:            "Agent 已结束本轮工作，但最终回复发送失败，请检查会话或服务日志。",
+		LangTraditionalChinese: "Agent 已結束本輪工作，但最終回覆傳送失敗，請檢查對話或服務日誌。",
+		LangJapanese:           "エージェントの実行は終了しましたが、最終回答を送信できませんでした。会話やログを確認してください。",
+		LangSpanish:            "El agente terminó, pero no se pudo entregar la respuesta final. Revisa la conversación o los registros.",
+	},
+	MsgAttentionBlockedPermission: {
+		LangEnglish:            "🔔 Waiting for you — the agent needs permission to use `%s`.",
+		LangChinese:            "🔔 等待你处理 —— Agent 请求使用工具 `%s` 的权限。",
+		LangTraditionalChinese: "🔔 等待你處理 —— Agent 請求使用工具 `%s` 的權限。",
+		LangJapanese:           "🔔 対応待ち —— エージェントがツール `%s` の権限を要求しています。",
+		LangSpanish:            "🔔 Te espera — el agente necesita permiso para usar `%s`.",
+	},
+	MsgAttentionBlockedQuestion: {
+		LangEnglish:            "🔔 Waiting for you — the agent asked a question.",
+		LangChinese:            "🔔 等待你处理 —— Agent 向你提问了。",
+		LangTraditionalChinese: "🔔 等待你處理 —— Agent 向你提問了。",
+		LangJapanese:           "🔔 対応待ち —— エージェントから質問があります。",
+		LangSpanish:            "🔔 Te espera — el agente te hizo una pregunta.",
 	},
 	MsgSessionNotFound: {
 		LangEnglish:            "⚠️ Session expired. Use /new to start a fresh conversation.",

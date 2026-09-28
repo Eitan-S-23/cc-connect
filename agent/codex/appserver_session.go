@@ -82,7 +82,11 @@ type itemNotification struct {
 }
 
 type errorNotification struct {
-	Message string `json:"message"`
+	Message   string `json:"message"` // legacy flat error payload
+	WillRetry bool   `json:"willRetry"`
+	Error     *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 type appServerRateLimitsResponse struct {
@@ -1142,6 +1146,8 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 					errMsg = "turn failed (no details)"
 				}
 				s.failTurn(fmt.Errorf("%s", errMsg))
+			} else if strings.EqualFold(strings.TrimSpace(notif.Turn.Status), "interrupted") {
+				s.failTurn(context.Canceled)
 			} else {
 				s.completeTurn()
 			}
@@ -1173,8 +1179,23 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 
 	case "error":
 		var notif errorNotification
-		if err := json.Unmarshal(paramsRaw, &notif); err == nil && strings.TrimSpace(notif.Message) != "" {
-			s.emitError(fmt.Errorf("%s", notif.Message))
+		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+			if notif.WillRetry {
+				// The server is still working. A recoverable API error must
+				// not end the engine's turn or trigger a stopped notification.
+				slog.Debug("codex appserver: transient error, server will retry")
+				return
+			}
+			message := strings.TrimSpace(notif.Message)
+			if notif.Error != nil && strings.TrimSpace(notif.Error.Message) != "" {
+				message = strings.TrimSpace(notif.Error.Message)
+			}
+			if message == "" {
+				message = "turn failed (no details)"
+			}
+			// Clearing the active turn also deduplicates the subsequent
+			// turn/completed (failed) notification from the same failure.
+			s.failTurn(fmt.Errorf("%s", message))
 		}
 	}
 }

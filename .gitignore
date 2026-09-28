@@ -75,6 +75,10 @@ test/
 scripts/
 tmp/
 temp/
+# 本地缓存目录（会话清理审计等一次性数据）
+.cache/
+# WebSocket 测试落盘文件（每次测试生成）
+core/test_ws_*.json
 *.tmp
 *.swp
 *.swo
@@ -130,6 +134,8 @@ Desktop.ini
 # AI agent planning artifacts
 # ============================================================================
 .planning/
+# AI agent 工作留痕（context-summary / operations-log），属本机过程文档，不入库
+.claude/
 
 # ============================================================================
 # Local git worktrees

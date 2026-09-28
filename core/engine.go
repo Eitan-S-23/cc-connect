@@ -353,6 +353,40 @@ type RateLimitCfg struct {
 	Window      time.Duration // sliding window size
 }
 
+// AttentionNotifyCfg controls the optional "the agent needs you" alert.
+//
+// Some platforms never push a notification for the messages cc-connect
+// normally relies on: streaming card edits and reaction emoji are silent, and
+// Feishu only notifies on a newly created message that really mentions the
+// user. When this is enabled the engine sends one extra short message per
+// event, carrying a real @mention, so the user's device rings.
+//
+// The zero value disables the feature, which keeps every existing deployment
+// unchanged until it opts in via config.
+type AttentionNotifyCfg struct {
+	Enabled bool
+	// OnTurnComplete alerts after a turn produced its final reply, so the user
+	// knows the agent stopped working.
+	OnTurnComplete bool
+	// OnBlocked alerts when the agent stops and waits for a human decision
+	// (permission request, AskUserQuestion).
+	OnBlocked bool
+	// OnError alerts on any unsuccessful turn termination, not selected HTTP codes.
+	OnError bool
+	// MentionUser controls whether the sender is @-mentioned in the alert.
+	// Requires the platform to implement AttentionNotifier; platforms without
+	// it fall back to a plain send, which is still a new message.
+	MentionUser bool
+	// Content overrides the turn-complete alert body; empty = i18n default.
+	// The blocked alert body is always the i18n default because it embeds the
+	// tool name.
+	Content string
+	// MinDuration is the shortest turn that triggers a turn-complete alert.
+	// Shorter turns are skipped so quick back-and-forth exchanges stay quiet.
+	// Zero means every completed turn alerts.
+	MinDuration time.Duration
+}
+
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
 	name                  string
@@ -410,6 +444,7 @@ type Engine struct {
 	outgoingRL       *OutgoingRateLimiter
 	streamPreview    StreamPreviewCfg
 	instantReply     InstantReplyCfg
+	attentionNotify  AttentionNotifyCfg
 	references       ReferenceRenderCfg
 	relayManager     *RelayManager
 	eventIdleTimeout time.Duration
@@ -527,6 +562,7 @@ type queuedMessage struct {
 	images            []ImageAttachment
 	files             []FileAttachment
 	fromVoice         bool
+	fromHeartbeat     bool
 	userID            string
 	userName          string // sender's display name for sender injection
 	msgPlatform       string // platform name for sender injection
@@ -582,6 +618,18 @@ type interactiveState struct {
 	// currentTurnUserMessageTimeMs is the UserMessageTimeMs for the in-flight
 	// foreground turn (including a queued turn after EventResult).
 	currentTurnUserMessageTimeMs int64
+
+	// currentUserID / currentUserName identify the sender of the message that
+	// started the in-flight turn. They feed the attention-notify @mention and
+	// are refreshed on every turn (foreground and queued); both stay empty when
+	// the platform reports no sender.
+	currentUserID   string
+	currentUserName string
+	fromHeartbeat   bool
+	// Explicit cancellation is distinct from a process failure. Recalled
+	// messages retain the existing silent-stop behavior.
+	attentionStopRequested bool
+	attentionStopSilent    bool
 }
 
 // latestUserMessageWatermarkLocked returns the highest UserMessageTimeMs among
@@ -907,6 +955,11 @@ func (e *Engine) SetDisplayConfig(cfg DisplayCfg) {
 // SetInstantReply configures the immediate confirmation reply.
 func (e *Engine) SetInstantReply(cfg InstantReplyCfg) {
 	e.instantReply = cfg
+}
+
+// SetAttentionNotify configures the optional "the agent needs you" alert.
+func (e *Engine) SetAttentionNotify(cfg AttentionNotifyCfg) {
+	e.attentionNotify = cfg
 }
 
 // SetReferenceConfig configures local reference normalization/rendering.
@@ -2292,12 +2345,13 @@ func (e *Engine) ExecuteHeartbeat(sessionKey, prompt string, silent bool) error 
 	}
 
 	msg := &Message{
-		SessionKey: sessionKey,
-		Platform:   platformName,
-		UserID:     "heartbeat",
-		UserName:   "heartbeat",
-		Content:    prompt,
-		ReplyCtx:   replyCtx,
+		SessionKey:    sessionKey,
+		Platform:      platformName,
+		UserID:        "heartbeat",
+		UserName:      "heartbeat",
+		Content:       prompt,
+		ReplyCtx:      replyCtx,
+		FromHeartbeat: true,
 	}
 
 	session := e.sessions.GetOrCreateActive(sessionKey)
@@ -3224,6 +3278,7 @@ func (e *Engine) queueMessageForBusySession(p Platform, msg *Message, interactiv
 		images:            msg.Images,
 		files:             msg.Files,
 		fromVoice:         msg.FromVoice,
+		fromHeartbeat:     msg.FromHeartbeat,
 		userID:            msg.UserID,
 		userName:          msg.UserName,
 		msgPlatform:       msg.Platform,
@@ -3758,6 +3813,8 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		agentOverride = agent
 	}
 	state := e.getOrCreateInteractiveStateWith(interactiveKey, p, msg.ReplyCtx, session, sessions, agentOverride, ccSessionKey)
+	// Preserve the previous turn's recipient until its reader relinquishes ownership.
+	e.stopUnsolicitedReader(state)
 
 	// Set workspaceDir on the state for idle reaper identification
 	if workspaceDir != "" {
@@ -3776,6 +3833,11 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	state.platform = p
 	state.replyCtx = msg.ReplyCtx
 	state.currentMessageID = msg.MessageID
+	state.currentUserID = msg.UserID
+	state.currentUserName = msg.UserName
+	state.fromHeartbeat = msg.FromHeartbeat
+	state.attentionStopRequested = false
+	state.attentionStopSilent = false
 	state.currentTurnUserMessageTimeMs = msg.UserMessageTimeMs
 	state.mu.Unlock()
 	stopRecallMonitor := e.startMessageRecallMonitor(interactiveKey)
@@ -3783,6 +3845,9 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 
 	if state.agentSession == nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgFailedToStartAgentSession))
+		attention := e.newAttentionTurn(state, msg.ReplyCtx, turnStart)
+		attention.failure = MsgAttentionStartFailed
+		attention.finish(false, false)
 		return
 	}
 	e.cancelAgentSessionIdleClose(state)
@@ -3829,7 +3894,6 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	// Stop the unsolicited reader (if running) and hand off event channel
 	// ownership to this foreground turn. Only drain events when the previous
 	// turn ended abnormally (eventsNeedResync=true, the default).
-	e.stopUnsolicitedReader(state)
 	state.mu.Lock()
 	needResync := state.eventsNeedResync
 	state.mu.Unlock()
@@ -4751,8 +4815,15 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 	events := agentSession.Events()
 
 	var turnActive bool // true after first event, cleared on EventResult
+	// turnStartedAt is when the current unsolicited turn saw its first event;
+	// it feeds the attention-notify MinDuration threshold.
+	var turnStartedAt time.Time
+	var attention *attentionTurn
 	defer func() {
 		if turnActive {
+			if ctx.Err() == nil {
+				attention.finish(false, false)
+			}
 			if workspaceDir != "" && e.workspacePool != nil {
 				if ws := e.workspacePool.Get(workspaceDir); ws != nil {
 					ws.EndTurn()
@@ -4776,6 +4847,9 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 			if !ok {
 				// Channel closed — agent process exited. Log any buffered
 				// tool/text context so it isn't lost silently.
+				if turnActive && attention != nil {
+					attention.failure = MsgAttentionProcessExited
+				}
 				if len(toolsUsed) > 0 || len(textParts) > 0 {
 					slog.Warn("unsolicited reader: agent channel closed mid-turn",
 						"session", sessionKey,
@@ -4807,9 +4881,21 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 			default:
 			}
 
+			if event.Type == EventResult && !event.Done {
+				continue
+			}
+			if event.Type == EventResult && event.Error != nil {
+				event.Type = EventError
+			}
+
 			// Mark workspace active on first event.
 			if !turnActive {
 				turnActive = true
+				turnStartedAt = time.Now()
+				state.mu.Lock()
+				attentionReplyCtx := state.replyCtx
+				state.mu.Unlock()
+				attention = e.newAttentionTurn(state, attentionReplyCtx, turnStartedAt)
 				if workspaceDir != "" && e.workspacePool != nil {
 					if ws := e.workspacePool.Get(workspaceDir); ws != nil {
 						ws.BeginTurn()
@@ -4826,6 +4912,7 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 
 			switch event.Type {
 			case EventText:
+				event.Content = attention.filterHeartbeatText(event.Content)
 				if event.Content != "" {
 					textParts = append(textParts, event.Content)
 				}
@@ -4848,14 +4935,29 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 					"status", event.ToolStatus)
 
 			case EventResult:
+				var heartbeatTail string
+				event.Content, heartbeatTail = attention.finishHeartbeatText(event.Content)
+				if heartbeatTail != "" {
+					textParts = append(textParts, heartbeatTail)
+				}
 				fullResponse := event.Content
 				if fullResponse == "" && len(textParts) > 0 {
 					fullResponse = strings.Join(textParts, "")
 				}
 
-				if fullResponse != "" {
-					for _, chunk := range SplitMessageCodeFenceAware(fullResponse, maxPlatformMessageLen) {
-						e.send(p, replyCtx, chunk)
+				displayResponse := fullResponse
+				isSilent := isSilentReply(fullResponse)
+				if stripped, ok := stripTrailingSilent(fullResponse); ok {
+					displayResponse = stripped
+					isSilent = strings.TrimSpace(stripped) == ""
+				}
+				if !isSilent && displayResponse != "" {
+					for _, chunk := range SplitMessageCodeFenceAware(displayResponse, maxPlatformMessageLen) {
+						if err := e.sendWithError(p, replyCtx, chunk); err != nil {
+							attention.failure = MsgAttentionDeliveryFailed
+							attention.finish(false, false)
+							break
+						}
 					}
 				}
 
@@ -4896,6 +4998,8 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 					"session", sessionKey,
 					"response_len", len(fullResponse))
 
+				attention.finish(true, isSilent)
+
 			case EventPermissionRequest:
 				// If approveAll (/yolo) is set, grant the request. Otherwise
 				// deny — there is no active user turn to consult — and notify
@@ -4935,6 +5039,10 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 						toolName = "(unknown)"
 					}
 					e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgBackgroundAutoDenied), toolName))
+					// A background task that got auto-denied genuinely needs a
+					// human: repeat it as an alert so the device rings. No-op
+					// unless the project enabled attention_notify.
+					attention.notifyBlocked(event.RequestID, e.attentionBlockedPermissionText(toolName))
 				}
 
 			case EventError:
@@ -4966,6 +5074,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		state.currentMessageID = msgID
 		state.mu.Unlock()
 	}
+	attention := e.newAttentionTurn(state, replyCtx, turnStart)
+	// Unhandled early returns are failures, never successful completions.
+	// This closure follows the replacement notice when a queued turn begins.
+	defer func() { attention.finish(false, false) }()
 
 	var textParts []string
 	var segmentStart int // index into textParts: text before this has been sent/displayed
@@ -4980,6 +5092,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 	var partialText string
 	triggerAutoCompress := false
 	pendingSend := sendDone
+	var bufferedEvents []Event
+	eventsClosed := false
 
 	// stopTyping tracks the current turn's typing indicator so it can be
 	// stopped when a queued message starts a new turn.
@@ -5065,107 +5179,126 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		var event Event
 		var ok bool
 
-		select {
-		case <-stopCh:
-			sp.discard()
-			return
-		case event, ok = <-events:
-			if !ok {
-				goto channelClosed
-			}
-		case err := <-pendingSend:
-			pendingSend = nil
-			if err != nil {
-				slog.Error("failed to send prompt", "error", err, "session_key", sessionKey)
+		if len(bufferedEvents) > 0 {
+			event = bufferedEvents[0]
+			bufferedEvents = bufferedEvents[1:]
+		} else if eventsClosed {
+			goto channelClosed
+		} else {
+			select {
+			case <-stopCh:
+				attention.failure = MsgAttentionStopped
 				sp.discard()
-				if stopTyping != nil {
-					stopTyping()
-					stopTyping = nil
-				}
-				e.notifyDroppedQueuedMessages(state, err)
-				if state.agentSession == nil || !state.agentSession.Alive() {
-					e.cleanupInteractiveState(sessionKey, state)
-				}
-				state.mu.Lock()
-				p := state.platform
-				state.mu.Unlock()
-				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 				return
-			}
-			continue
-		case <-idleCh:
-			slog.Error("agent session idle timeout: no events for too long, killing session",
-				"session_key", sessionKey, "timeout", e.eventIdleTimeout, "elapsed", time.Since(turnStart))
-			cp.Finalize(ProgressCardStateFailed)
-			sp.discard()
-			state.mu.Lock()
-			state.eventsNeedResync = true
-			p := state.platform
-			state.mu.Unlock()
-			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session timed out (no response)"))
-			e.cleanupInteractiveState(sessionKey, state)
-			return
-		case <-turnDeadlineCh:
-			elapsed := time.Since(turnStart)
-			slog.Warn("agent turn exceeded max_turn_time: sending stop signal, will force-kill if needed",
-				"session_key", sessionKey, "max_turn_time", e.maxTurnTime, "elapsed", elapsed)
-			cp.Finalize(ProgressCardStateFailed)
-			sp.discard()
-			state.mu.Lock()
-			p := state.platform
-			state.mu.Unlock()
-			e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError),
-				fmt.Sprintf("agent turn exceeded maximum time (%v), stopping", e.maxTurnTime)))
-
-			// Two-phase shutdown: first try a graceful stop so the agent can
-			// write its final state before dying (preserves --resume ability).
-			// If it doesn't exit within a short grace window, force-kill.
-			state.markStopped()
-			gracePeriod := 10 * time.Second
-			graceTimer := time.NewTimer(gracePeriod)
-		graceLoop:
-			for {
-				select {
-				case evt, ok := <-state.agentSession.Events():
-					if !ok || (ok && evt.Done) {
-						// Agent exited cleanly; state is intact, resume will work.
-						slog.Info("agent exited gracefully after max_turn_time stop signal",
-							"session_key", sessionKey, "elapsed", time.Since(turnStart))
-						graceTimer.Stop()
-						state.mu.Lock()
-						state.eventsNeedResync = false
-						state.mu.Unlock()
-						break graceLoop
-					}
-				case <-graceTimer.C:
-					// Agent did not stop within grace period — force-kill.
-					slog.Error("agent did not stop within grace period after max_turn_time; force-killing",
-						"session_key", sessionKey, "grace_period", gracePeriod)
-					graceTimer.Stop()
+			case event, ok = <-events:
+				if !ok {
+					goto channelClosed
+				}
+			case err := <-pendingSend:
+				pendingSend = nil
+				if err != nil {
+					attention.failure = MsgAttentionSendFailed
+					slog.Error("failed to send prompt", "error", err, "session_key", sessionKey)
 					state.mu.Lock()
 					state.eventsNeedResync = true
 					state.mu.Unlock()
-					e.cleanupInteractiveState(sessionKey, state)
+					sp.discard()
+					if stopTyping != nil {
+						stopTyping()
+						stopTyping = nil
+					}
+					e.notifyDroppedQueuedMessages(state, err)
+					if state.agentSession == nil || !state.agentSession.Alive() {
+						e.cleanupInteractiveState(sessionKey, state)
+					}
+					state.mu.Lock()
+					p := state.platform
+					state.mu.Unlock()
+					e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 					return
 				}
+				continue
+			case <-idleCh:
+				attention.failure = MsgAttentionIdleTimeout
+				slog.Error("agent session idle timeout: no events for too long, killing session",
+					"session_key", sessionKey, "timeout", e.eventIdleTimeout, "elapsed", time.Since(turnStart))
+				cp.Finalize(ProgressCardStateFailed)
+				sp.discard()
+				state.mu.Lock()
+				state.eventsNeedResync = true
+				p := state.platform
+				state.mu.Unlock()
+				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "agent session timed out (no response)"))
+				e.cleanupInteractiveState(sessionKey, state)
+				return
+			case <-turnDeadlineCh:
+				attention.failure = MsgAttentionTurnTimeout
+				elapsed := time.Since(turnStart)
+				slog.Warn("agent turn exceeded max_turn_time: sending stop signal, will force-kill if needed",
+					"session_key", sessionKey, "max_turn_time", e.maxTurnTime, "elapsed", elapsed)
+				cp.Finalize(ProgressCardStateFailed)
+				sp.discard()
+				state.mu.Lock()
+				p := state.platform
+				state.mu.Unlock()
+				e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError),
+					fmt.Sprintf("agent turn exceeded maximum time (%v), stopping", e.maxTurnTime)))
+				attention.finish(false, false)
+
+				// Two-phase shutdown: first try a graceful stop so the agent can
+				// write its final state before dying (preserves --resume ability).
+				// If it doesn't exit within a short grace window, force-kill.
+				state.markStopped()
+				gracePeriod := 10 * time.Second
+				graceTimer := time.NewTimer(gracePeriod)
+			graceLoop:
+				for {
+					select {
+					case evt, ok := <-state.agentSession.Events():
+						if !ok || (ok && evt.Done) {
+							// Agent exited cleanly; state is intact, resume will work.
+							slog.Info("agent exited gracefully after max_turn_time stop signal",
+								"session_key", sessionKey, "elapsed", time.Since(turnStart))
+							graceTimer.Stop()
+							state.mu.Lock()
+							state.eventsNeedResync = false
+							state.mu.Unlock()
+							break graceLoop
+						}
+					case <-graceTimer.C:
+						// Agent did not stop within grace period — force-kill.
+						slog.Error("agent did not stop within grace period after max_turn_time; force-killing",
+							"session_key", sessionKey, "grace_period", gracePeriod)
+						graceTimer.Stop()
+						state.mu.Lock()
+						state.eventsNeedResync = true
+						state.mu.Unlock()
+						e.cleanupInteractiveState(sessionKey, state)
+						return
+					}
+				}
+				// Graceful exit path: cleanupInteractiveState closes the session,
+				// but eventsNeedResync=false so the next --resume works correctly.
+				e.cleanupInteractiveState(sessionKey, state)
+				return
+			case <-e.ctx.Done():
+				state.mu.Lock()
+				state.eventsNeedResync = true
+				state.mu.Unlock()
+				return
 			}
-			// Graceful exit path: cleanupInteractiveState closes the session,
-			// but eventsNeedResync=false so the next --resume works correctly.
-			e.cleanupInteractiveState(sessionKey, state)
-			return
-		case <-e.ctx.Done():
+		}
+
+		if state.isStopped() {
+			attention.failure = MsgAttentionStopped
+			sp.discard()
 			state.mu.Lock()
 			state.eventsNeedResync = true
 			state.mu.Unlock()
 			return
 		}
-
-		if state.isStopped() {
-			sp.discard()
-			state.mu.Lock()
-			state.eventsNeedResync = true
-			state.mu.Unlock()
-			return
+		if eventsClosed && event.Type == EventPermissionRequest {
+			continue
 		}
 
 		// Reset idle timer after receiving an event
@@ -5189,6 +5322,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		state.mu.Lock()
 		p := state.platform
 		state.mu.Unlock()
+		if event.Type == EventResult && event.Done && event.Error != nil {
+			event.Type = EventError
+		}
+		if event.Type == EventError && errors.Is(event.Error, context.Canceled) {
+			attention.failure = MsgAttentionStopped
+		}
 
 		// main codebase has no per-session quiet flag; pr309 referenced
 		// sessionQuiet which we drop. e.display.ThinkingMessages /
@@ -5481,7 +5620,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			}
 
 		case EventText:
-			content := event.Content
+			content := attention.filterHeartbeatText(event.Content)
 			if e.display.HideAgentFooter {
 				content = stripAgentFooterLines(content)
 			}
@@ -5686,6 +5825,18 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				e.sendPermissionPrompt(p, replyCtx, prompt, event.ToolName, toolInput)
 			}
 
+			// Optional extra alert so the user's device rings while the agent
+			// is blocked on their decision. The prompt above is a card (or a
+			// card update on Feishu), which does not reach the device as a
+			// notification on its own. No-op unless the project enabled
+			// attention_notify. Sent after the prompt so the actionable card is
+			// already on screen if the alert fails.
+			if isAskQuestion {
+				attention.notifyBlocked(event.RequestID, e.i18n.T(MsgAttentionBlockedQuestion))
+			} else {
+				attention.notifyBlocked(event.RequestID, e.attentionBlockedPermissionText(event.ToolName))
+			}
+
 			// Stop idle timer while waiting for user permission response;
 			// the user may take a long time to decide, and we don't want
 			// the idle timeout to kill the session during that wait.
@@ -5693,7 +5844,67 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				idleTimer.Stop()
 			}
 
-			<-pending.Resolved
+			clearPending := func() {
+				state.mu.Lock()
+				if state.pending == pending {
+					state.pending = nil
+				}
+				state.mu.Unlock()
+				pending.resolve()
+			}
+			// Keep reading while waiting: a provider error or dead process must
+			// not leave the engine parked on a question nobody can answer.
+			// Replay progress through the normal loop after the wait ends.
+		permissionWait:
+			for {
+				select {
+				case <-pending.Resolved:
+					clearPending()
+					break permissionWait
+				case next, open := <-events:
+					if !open {
+						eventsClosed = true
+					} else {
+						if len(bufferedEvents) >= 128 {
+							clearPending()
+							e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), "too many events while waiting for permission"))
+							e.cleanupInteractiveState(sessionKey, state)
+							return
+						}
+						if next.Type == EventError || (next.Type == EventResult && next.Done && next.Error != nil) {
+							// Failure takes priority over stale permissions or a
+							// buffered result from the interrupted request.
+							bufferedEvents = append([]Event{next}, bufferedEvents...)
+						} else {
+							bufferedEvents = append(bufferedEvents, next)
+							continue
+						}
+					}
+					clearPending()
+					break permissionWait
+				case err := <-pendingSend:
+					pendingSend = nil
+					if err != nil {
+						attention.failure = MsgAttentionSendFailed
+						bufferedEvents = append([]Event{{Type: EventError, Error: err}}, bufferedEvents...)
+						clearPending()
+						break permissionWait
+					}
+				case <-stopCh:
+					clearPending()
+					attention.failure = MsgAttentionStopped
+					return
+				case <-e.ctx.Done():
+					clearPending()
+					return
+				case <-turnDeadlineCh:
+					clearPending()
+					attention.failure = MsgAttentionTurnTimeout
+					attention.finish(false, false)
+					e.cleanupInteractiveState(sessionKey, state)
+					return
+				}
+			}
 			slog.Info("permission resolved", "request_id", event.RequestID)
 
 			// The stream preview was frozen+detached when this permission
@@ -5751,6 +5962,11 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.eventsNeedResync = false
 			state.mu.Unlock()
 
+			var heartbeatTail string
+			event.Content, heartbeatTail = attention.finishHeartbeatText(event.Content)
+			if heartbeatTail != "" {
+				textParts = append(textParts, heartbeatTail)
+			}
 			fullResponse := event.Content
 			if e.display.HideAgentFooter {
 				fullResponse = stripAgentFooterLines(fullResponse)
@@ -5888,6 +6104,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			state.mu.Unlock()
 
 			replyStart := time.Now()
+			attention.failure = MsgAttentionDeliveryFailed
 
 			// --- StreamingCard path ---
 			if streamCard != nil && !streamCard.Failed() {
@@ -6039,6 +6256,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if elapsed := time.Since(replyStart); elapsed >= slowPlatformSend {
 				slog.Warn("slow final reply send", "platform", p.Name(), "elapsed", elapsed, "response_len", len(fullResponse))
 			}
+			// Finish before a queued sender replaces the turn's routing, and
+			// before auto-compress can return through a separate event loop.
+			attention.finish(true, isSilent)
 
 			// TTS: async voice reply if enabled (skipped for silent replies)
 			if !isSilent && e.tts != nil && e.tts.Enabled && e.tts.TTS != nil {
@@ -6103,6 +6323,11 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				state.platform = queued.platform
 				state.replyCtx = queued.replyCtx
 				state.currentMessageID = queued.messageID
+				state.currentUserID = queued.userID
+				state.currentUserName = queued.userName
+				state.fromHeartbeat = queued.fromHeartbeat
+				state.attentionStopRequested = false
+				state.attentionStopSilent = false
 				state.fromVoice = queued.fromVoice
 				state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 				state.mu.Unlock()
@@ -6153,9 +6378,12 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				// Reset per-turn state for the next turn
 				msgID = queued.messageID
 				textParts = nil
+				bufferedEvents = nil
+				eventsClosed = false
 				segmentStart = 0
 				toolCount = 0
 				turnStart = time.Now()
+				attention = e.newAttentionTurn(state, queued.replyCtx, turnStart)
 				firstEventLogged = false
 				waitStart = time.Now()
 				// Reassign the local replyCtx parameter to the queued message's
@@ -6287,6 +6515,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 channelClosed:
 	// Channel closed - process exited unexpectedly
+	attention.failure = MsgAttentionProcessExited
+	if state.isStopped() {
+		attention.failure = MsgAttentionStopped
+	}
 	slog.Warn("agent process exited", "session_key", sessionKey)
 	state.mu.Lock()
 	state.eventsNeedResync = true
@@ -6444,6 +6676,10 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.platform = queued.platform
 		state.replyCtx = queued.replyCtx
 		state.currentMessageID = queued.messageID
+		state.currentUserID = queued.userID
+		state.currentUserName = queued.userName
+		state.attentionStopRequested = false
+		state.attentionStopSilent = false
 		state.fromVoice = queued.fromVoice
 		state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 		state.mu.Unlock()
@@ -10338,6 +10574,8 @@ func (e *Engine) stopInteractiveSessionWithOptions(sessionKey string, notifyQueu
 	agentSession := state.agentSession
 	closePlatform := state.platform
 	closeReplyCtx := state.replyCtx
+	state.attentionStopRequested = true
+	state.attentionStopSilent = !notifyQueued
 	state.mu.Unlock()
 
 	// If the agent session supports graceful turn cancellation (e.g. ACP),

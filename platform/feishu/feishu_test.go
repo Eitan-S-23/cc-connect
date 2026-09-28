@@ -2172,3 +2172,190 @@ func TestFlushImageBatchForSession_NoBatchIsSafe(t *testing.T) {
 		t.Fatalf("imageBatch size = %d, want 0", n)
 	}
 }
+
+// TestNotifyAttentionSendsTextMention verifies the attention alert is sent as
+// a MsgTypeText message whose body really mentions the sender. Feishu only
+// pushes a notification for a newly created message with a real <at> tag, so
+// both parts are load-bearing: a card (or a post) would render the mention
+// without notifying anyone.
+func TestNotifyAttentionSendsTextMention(t *testing.T) {
+	const appID = "cli_attention"
+	const appSecret = "secret"
+	const chatID = "oc_test_group"
+
+	var gotMsgType string
+	var gotContent string
+	var createCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/open-apis/auth/v3/tenant_access_token/internal":
+			writeJSON(t, w, map[string]any{"code": 0, "expire": 7200, "tenant_access_token": "t"})
+		case r.URL.Path == "/open-apis/im/v1/messages" && r.Method == http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			var req struct {
+				MsgType string `json:"msg_type"`
+				Content string `json:"content"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("unmarshal request body: %v", err)
+			}
+			createCalls++
+			gotMsgType = req.MsgType
+			gotContent = req.Content
+			writeJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"message_id": "om_ok"}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	p := &Platform{
+		platformName: "feishu",
+		domain:       srv.URL,
+		appID:        appID,
+		appSecret:    appSecret,
+		client:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client())),
+		replayClient: lark.NewClient(appID, appSecret, lark.WithEnableTokenCache(false), lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client())),
+	}
+
+	rc := replyContext{chatID: chatID}
+	err := p.NotifyAttention(context.Background(), rc, "ou_sender_openid", "张三", "🔔 完成 —— Agent 已结束本轮工作。")
+	if err != nil {
+		t.Fatalf("NotifyAttention error = %v", err)
+	}
+	if createCalls != 1 {
+		t.Fatalf("create-message calls = %d, want 1", createCalls)
+	}
+	if gotMsgType != larkim.MsgTypeText {
+		t.Fatalf("msg_type = %q, want %q (卡片/post 里的 <at> 不会触发飞书提及推送)", gotMsgType, larkim.MsgTypeText)
+	}
+	// content 是 JSON，且 Go 的 json.Marshal 会把 < > 转义成 < >，
+	// 所以先解出 text 再断言，避免断言被转义形式干扰。
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(gotContent), &body); err != nil {
+		t.Fatalf("unmarshal content %s: %v", gotContent, err)
+	}
+	if !strings.Contains(body.Text, `<at user_id="ou_sender_openid">`) {
+		t.Fatalf("content 缺少生效的提及标签, got %s", body.Text)
+	}
+	if !strings.Contains(body.Text, "完成") {
+		t.Fatalf("content 缺少提醒正文, got %s", body.Text)
+	}
+}
+
+// Reply contexts must still create a standalone text mention, not a quoted reply.
+func TestNotifyAttentionReplyContextCreatesNewMention(t *testing.T) {
+	for _, name := range []string{"", `Alice</at><at user_id="all">everyone`} {
+		t.Run(name, func(t *testing.T) {
+			requests := make(chan string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/open-apis/auth/v3/tenant_access_token/internal":
+					writeJSON(t, w, map[string]any{"code": 0, "expire": 7200, "tenant_access_token": "test-token"})
+				case "/open-apis/im/v1/messages":
+					if r.Method != http.MethodPost {
+						t.Errorf("method = %s, want a newly created message", r.Method)
+					}
+					var request struct {
+						ReceiveID string `json:"receive_id"`
+						MsgType   string `json:"msg_type"`
+						Content   string `json:"content"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+						return
+					}
+					if request.ReceiveID != "oc_thread" || r.URL.Query().Get("receive_id_type") != "chat_id" {
+						t.Error("attention message did not target the original chat")
+					}
+					if request.MsgType != larkim.MsgTypeText {
+						t.Errorf("msg_type = %q, want text mention", request.MsgType)
+					}
+					requests <- request.Content
+					writeJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"message_id": "om_notice"}})
+				default:
+					t.Errorf("unexpected API call (no quoted reply or card edit expected): %s", r.URL.Path)
+					writeJSON(t, w, map[string]any{"code": 1, "msg": "unexpected request"})
+				}
+			}))
+			defer srv.Close()
+			client := lark.NewClient("cli_attention_thread", "test-secret", lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client()))
+			p := &Platform{platformName: "feishu", client: client, replayClient: client, threadIsolation: true}
+			rc := replyContext{messageID: "om_original", chatID: "oc_thread", sessionKey: "feishu:oc_thread:root:om_original"}
+			if err := p.NotifyAttention(context.Background(), rc, "ou_alice", name, "Stopped: check the conversation."); err != nil {
+				t.Fatal(err)
+			}
+			var content struct {
+				Text string `json:"text"`
+			}
+			select {
+			case raw := <-requests:
+				if err := json.Unmarshal([]byte(raw), &content); err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("no independent mention created")
+			}
+			if strings.Count(content.Text, "<at ") != 1 || !strings.Contains(content.Text, `<at user_id="ou_alice">`) {
+				t.Fatalf("unsafe or missing mention: %q", content.Text)
+			}
+			if name == "" && !strings.Contains(content.Text, ">ou_alice</at>") {
+				t.Fatalf("missing fallback name: %q", content.Text)
+			}
+		})
+	}
+}
+
+// A plain message is not a notification for someone using mention-only alerts.
+func TestNotifyAttentionWithoutOpenIDDoesNotSendPlainMessage(t *testing.T) {
+	const appID = "cli_attention_noopenid"
+	const appSecret = "secret"
+	const chatID = "oc_test_group"
+
+	var messageCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/open-apis/auth/v3/tenant_access_token/internal":
+			writeJSON(t, w, map[string]any{"code": 0, "expire": 7200, "tenant_access_token": "t"})
+		case strings.HasPrefix(r.URL.Path, "/open-apis/im/v1/messages") && r.Method == http.MethodPost:
+			messageCalls++
+			writeJSON(t, w, map[string]any{"code": 0, "data": map[string]any{"message_id": "om_ok"}})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	p := &Platform{
+		platformName: "feishu",
+		domain:       srv.URL,
+		appID:        appID,
+		appSecret:    appSecret,
+		client:       lark.NewClient(appID, appSecret, lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client())),
+		replayClient: lark.NewClient(appID, appSecret, lark.WithEnableTokenCache(false), lark.WithOpenBaseUrl(srv.URL), lark.WithHttpClient(srv.Client())),
+	}
+
+	rc := replyContext{chatID: chatID}
+	for _, tc := range []struct {
+		name   string
+		userID string
+	}{
+		{"user_id", "u_1234567"},
+		{"union_id", "on_abcdefg"},
+		{"empty", ""},
+		{"incomplete_open_id", "ou_"},
+		{"malformed_open_id", `ou_abc"<`},
+	} {
+		if err := p.NotifyAttention(context.Background(), rc, tc.userID, "User", "Done"); err == nil {
+			t.Errorf("%s: missing open_id must return an error", tc.name)
+		}
+	}
+	if messageCalls != 0 {
+		t.Errorf("sent %d unmentioned attention messages, want 0", messageCalls)
+	}
+}
