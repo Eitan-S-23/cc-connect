@@ -169,13 +169,6 @@ func (e *Engine) notifyAttentionWithMention(p Platform, replyCtx any, userID, us
 	mentionUser := e.attentionNotify.MentionUser && allowMention
 	if !mentionUser {
 		userID, userName = "", ""
-	} else if isSyntheticAttentionUserID(userID) {
-		// 定时任务/心跳/webhook 等合成回合没有真实发送者。占位身份会让平台
-		// 拒绝发送并丢弃整条提醒，改从会话键解析会话归属人；解析不出
-		// （共享会话、线程键）时维持原样，由平台按既有策略处理。
-		if ownerID, ownerName, ok := resolveAttentionOwner(p, replyCtx); ok {
-			userID, userName = ownerID, ownerName
-		}
 	}
 	ctx, cancel := context.WithTimeout(e.ctx, attentionNotifyTimeout)
 	defer cancel()
@@ -204,41 +197,6 @@ func (e *Engine) notifyAttentionWithMention(p Platform, replyCtx any, userID, us
 		return
 	}
 	slog.Info("attention notify sent", "platform", p.Name(), "mention_requested", supportsMention && mentionUser && userID != "")
-}
-
-// isSyntheticAttentionUserID reports whether the mention target is the
-// placeholder identity of a synthetic turn (timer, cron, heartbeat, webhook,
-// web-admin) rather than a real user. An empty identity counts as unusable for
-// the same reason.
-func isSyntheticAttentionUserID(id string) bool {
-	switch strings.TrimSpace(id) {
-	case "", syntheticTimerUserID, syntheticCronUserID, syntheticHeartbeatUserID,
-		syntheticWebhookUserID, syntheticWebAdminUserID:
-		return true
-	default:
-		return false
-	}
-}
-
-// resolveAttentionOwner recovers the owner of a user-scoped session so that
-// synthetic turns can still @ the person the session belongs to. Shared-chat
-// and thread keys have no unambiguous owner: the platform reports that as an
-// error and the caller then keeps the original identity.
-func resolveAttentionOwner(p Platform, replyCtx any) (string, string, bool) {
-	resolver, ok := p.(AttentionRecipientResolver)
-	if !ok {
-		return "", "", false
-	}
-	userID, userName, err := resolver.ResolveAttentionRecipient(replyCtx)
-	if err != nil {
-		slog.Warn("attention notify: session owner unresolved",
-			"platform", p.Name(), "error", err)
-		return "", "", false
-	}
-	if strings.TrimSpace(userID) == "" {
-		return "", "", false
-	}
-	return userID, userName, true
 }
 
 // attentionBlockedPermissionText renders the alert body for a permission

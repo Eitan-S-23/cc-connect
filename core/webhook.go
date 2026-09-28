@@ -235,8 +235,8 @@ func (ws *WebhookServer) executePrompt(engine *Engine, sessionKey, prompt string
 	msg := &Message{
 		SessionKey: sessionKey,
 		Platform:   platformName,
-		UserID:     syntheticWebhookUserID,
-		UserName:   syntheticWebhookUserID,
+		UserID:     "webhook",
+		UserName:   "webhook",
 		Content:    prompt,
 		ReplyCtx:   replyCtx,
 	}
