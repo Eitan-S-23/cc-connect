@@ -1720,6 +1720,15 @@ func (e *Engine) ExecuteCronJob(job *CronJob) error {
 // ExecuteTimerJob fires a one-shot timer job: resolves the platform, sends a
 // notification (unless muted), and either runs a shell command or injects a
 // synthetic message into the agent session.
+// 定时任务与心跳注入的是合成消息，没有真实发送者，只能用占位身份。
+// 占位身份不是合法的平台用户 ID，不能直接当作提醒（attention notify）的
+// @ 目标——平台会拒绝发送，整条提醒将被丢弃；合成回合的收件人由
+// attention_notify.go 从会话键解析出会话归属人。
+const (
+	syntheticTimerUserID     = "timer"
+	syntheticHeartbeatUserID = "heartbeat"
+)
+
 func (e *Engine) ExecuteTimerJob(job *TimerJob) error {
 	e.hooks.Emit(HookEvent{
 		Event:      HookEventTimerTriggered,
@@ -1831,8 +1840,8 @@ func (e *Engine) ExecuteTimerJob(job *TimerJob) error {
 	msg := &Message{
 		SessionKey:   sessionKey,
 		Platform:     platformName,
-		UserID:       "timer",
-		UserName:     "timer",
+		UserID:       syntheticTimerUserID,
+		UserName:     syntheticTimerUserID,
 		Content:      content,
 		ReplyCtx:     replyCtx,
 		ModeOverride: job.Mode,
@@ -2347,8 +2356,8 @@ func (e *Engine) ExecuteHeartbeat(sessionKey, prompt string, silent bool) error 
 	msg := &Message{
 		SessionKey:    sessionKey,
 		Platform:      platformName,
-		UserID:        "heartbeat",
-		UserName:      "heartbeat",
+		UserID:        syntheticHeartbeatUserID,
+		UserName:      syntheticHeartbeatUserID,
 		Content:       prompt,
 		ReplyCtx:      replyCtx,
 		FromHeartbeat: true,
