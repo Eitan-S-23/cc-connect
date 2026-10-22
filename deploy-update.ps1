@@ -17,7 +17,7 @@ function Log($msg) {
 }
 
 # -- 90s buffer so the user can read the notice --------------------------
-Log "Deploy starts in 90 seconds. All cc-connect sessions will be interrupted. New binary: v1.5.1-beta.1+guo-fix (85e9820e)"
+Log "Deploy starts in 90 seconds. All cc-connect sessions will be interrupted. New binary: v1.5.1-beta.1+guo-fix (d8647490+dirty, stdio-fix)"
 Start-Sleep -Seconds 90
 
 try {

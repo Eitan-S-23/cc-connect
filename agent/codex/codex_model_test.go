@@ -64,9 +64,17 @@ func TestNormalizeAppServerURL_StdIOIsExplicit(t *testing.T) {
 	}
 }
 
-func TestNormalizeAppServerURL_EmptyKeepsWebSocketDefault(t *testing.T) {
-	if got := normalizeAppServerURL(""); got != "ws://127.0.0.1:3845" {
-		t.Fatalf("normalizeAppServerURL(empty) = %q, want ws://127.0.0.1:3845", got)
+func TestNormalizeAppServerURL_EmptyDefaultsToStdIO(t *testing.T) {
+	if got := normalizeAppServerURL(""); got != "stdio://" {
+		t.Fatalf("normalizeAppServerURL(empty) = %q, want stdio://", got)
+	}
+}
+
+func TestNormalizeAppServerURL_ExplicitWebSocketPreserved(t *testing.T) {
+	for _, raw := range []string{"ws://127.0.0.1:3845", " ws://127.0.0.1:3845 "} {
+		if got := normalizeAppServerURL(raw); got != "ws://127.0.0.1:3845" {
+			t.Fatalf("normalizeAppServerURL(%q) = %q, want ws://127.0.0.1:3845", raw, got)
+		}
 	}
 }
 

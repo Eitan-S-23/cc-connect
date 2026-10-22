@@ -118,12 +118,12 @@ func normalizeBackend(raw string) string {
 	}
 }
 
+// normalizeAppServerURL 归一化 app-server 传输地址：空值与 "stdio" 均归一为
+// stdio://（cc-connect 仅实现 stdio 通道；若传 ws:// 等地址，codex 会切换为
+// WebSocket 传输并停止读取 stdin，导致 initialize 握手 120 秒超时）。
 func normalizeAppServerURL(raw string) string {
 	url := strings.TrimSpace(raw)
-	if url == "" {
-		return "ws://127.0.0.1:3845"
-	}
-	if strings.EqualFold(url, "stdio") {
+	if url == "" || strings.EqualFold(url, "stdio") {
 		return "stdio://"
 	}
 	return url
