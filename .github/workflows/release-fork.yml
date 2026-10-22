@@ -1,0 +1,152 @@
+name: Release (fork)
+
+# 只在打 fork-v* 标签时触发，避免与上游 CI 的 main/PR 流程相互干扰。
+# 产物命名与官方 chenhg5/cc-connect 保持一致：
+#   cc-connect-<version>-<goos>-<goarch>.tar.gz  （非 Windows）
+#   cc-connect-<version>-<goos>-<goarch>.zip     （Windows）
+#   checksums.txt
+on:
+  push:
+    tags:
+      - 'fork-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建的标签名（如 fork-v1）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  APP: cc-connect
+  CMD: ./cmd/cc-connect
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: 解析版本与提交
+        id: meta
+        run: |
+          set -euo pipefail
+          REF="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          echo "version=${REF#fork-}" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: 构建前端资源（go:embed 依赖 web/dist）
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: 交叉编译
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ steps.meta.outputs.commit }}
+        run: |
+          set -euo pipefail
+          EXT=""
+          [ "$GOOS" = "windows" ] && EXT=".exe"
+          OUT="$APP-${VERSION}-${GOOS}-${GOARCH}${EXT}"
+          mkdir -p dist
+          go build -trimpath -tags 'goolm' \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
+            -o "dist/${OUT}" "$CMD"
+          echo "已构建 dist/${OUT}"
+
+      - name: 打包
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist
+          for f in "$APP"-*; do
+            case "$f" in
+              *.tar.gz|*.zip) continue ;;
+              *.exe) zip -q "${f%.exe}.zip" "$f" && rm -f "$f" ;;
+              *) tar czf "$f.tar.gz" "$f" && rm -f "$f" ;;
+            esac
+          done
+          sha256sum * > checksums.txt
+          ls -lh
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总产物
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 生成合并校验和
+        run: |
+          set -euo pipefail
+          cd dist
+          # 各矩阵任务各自生成了 checksums.txt，这里按最终文件重算一份
+          rm -f checksums.txt
+          sha256sum *.tar.gz *.zip > checksums.txt
+          cat checksums.txt
+
+      - name: 创建或更新 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --notes "fork 构建：基于 chenhg5/cc-connect 的本地改动（attention-notify、codex 进程树守卫、会话落盘修复、app-server stdio 修复）。" \
+              --prerelease
+          fi
