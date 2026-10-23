@@ -45,6 +45,51 @@ import (
 // agent "replies" for each user prompt, without bringing up a real LLM.
 // ---------------------------------------------------------------------------
 
+// Chat fails -> recover -> send a new request -> inspect history. The original
+// stays available and the fresh backend never resumes the rejected ID.
+func TestCUJ_B1_EncryptedHistoryRecoveryPreservesOriginal(t *testing.T) {
+	a := &recoveryTestAgent{context: SessionRecoveryContext{Text: "[user]\noriginal requirement\n[assistant]\nwork already done"}}
+	e, p, original := newRecoveryTestEngine(t, a)
+	e.ReceiveMessage(p, recoveryUserMessage("finish the work"))
+	waitAttentionSessionIdle(t, e, "test:user")
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "/recover broken-thread") {
+		t.Fatal("user was not offered readable-history recovery after the error")
+	}
+	e.ReceiveMessage(p, recoveryUserMessage("/recover broken-thread"))
+	recovered := e.sessions.GetOrCreateActive("test:user")
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "No model request has been made yet") {
+		t.Fatal("recovery receipt incorrectly implies a verified model response")
+	}
+	e.ReceiveMessage(p, recoveryUserMessage("only inspect remaining work"))
+	waitRecovery(t, func() bool {
+		return recovered.GetAgentSessionID() == "fresh-thread" && !recovered.Busy()
+	})
+	a.mu.Lock()
+	starts := append([]string(nil), a.starts...)
+	fresh := a.live[len(a.live)-1]
+	a.mu.Unlock()
+	if len(starts) != 2 || starts[0] != "broken-thread" || starts[1] != "" {
+		t.Fatalf("backend starts = %v; expected a genuinely fresh session after recovery", starts)
+	}
+	prompts := fresh.getSentPrompts()
+	if len(prompts) != 1 || !strings.Contains(prompts[0], "original requirement") ||
+		!strings.Contains(prompts[0], "only inspect remaining work") ||
+		!strings.Contains(prompts[0], "Do not replay past tool calls") {
+		t.Fatal("fresh request lost context or replay protection")
+	}
+	if original.GetAgentSessionID() != "broken-thread" || original.HistoryLen() < 2 {
+		t.Fatal("recover erased the original binding or chat history")
+	}
+	e.ReceiveMessage(p, recoveryUserMessage("/history"))
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "only inspect remaining work") {
+		t.Fatal("user cannot inspect the new session history")
+	}
+	e.ReceiveMessage(p, recoveryUserMessage("/recover broken-thread"))
+	if e.sessions.GetOrCreateActive("test:user") != recovered {
+		t.Fatal("a stale recovery card switched away from the recovered conversation")
+	}
+}
+
 // cujAgent is a controllable Agent that returns a configurable AgentSession
 // per StartSession call. Tests can mutate cujAgentSession.reply between
 // turns to simulate different agent responses.

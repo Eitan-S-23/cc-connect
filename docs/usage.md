@@ -34,6 +34,7 @@ Each user gets an independent session with full conversation context. Manage ses
 | Command | Description |
 |---------|-------------|
 | `/new [name]` | Start a new session |
+| `/recover [number\|id-prefix\|current-session-id]` | Prepare a fresh Codex session with readable context from that session, preserving original records and ciphertext |
 | `/list` | List all agent sessions for this project |
 | `/switch <id>` | Switch to a different session |
 | `/current` | Show current session info |
@@ -49,6 +50,19 @@ Each user gets an independent session with full conversation context. Manage ses
 | `/help` | Show available commands |
 
 During a session, the agent may request tool permissions. Reply **allow** / **deny** / **allow all**.
+
+### Recover rejected encrypted history (Codex)
+
+For `invalid_encrypted_content`, use the error card's **Keep History and Start Fresh** button or `/recover`. This prepares a genuinely fresh session with readable user/assistant messages and historical tool results, including the saved parent prefix of paginated forks. Original transcripts, ciphertext, and the old chat binding remain unchanged. Historical tool calls are reference data, not replayed actions.
+
+To recover a **different** session there are two ways:
+
+- In the `/list` card, click **Recovery mode**; every row then has a **Recover** button and the card footer returns to the list.
+- Send `/recover <number|id-prefix|name>`. Numbers match the `/list` rows; with no argument the current session is used.
+
+Buttons keep acting on the session they were rendered for, and a recovery that loses the active selection while exporting is discarded instead of overwriting a newer choice. An unmatched target is reported without changing the current session.
+
+The next message carries the recovered context. No model request or task retry happens when clicking the button, so preparation is not a connectivity check. The pending context survives restarts and failed first turns and is released after a successful turn has a backend session ID. Recovery is bounded to 128 KiB total and 16 KiB per entry, prioritizing the initial request and recent context. Truncation or previous compaction is disclosed. Provider-side errors can still recur; missing or unreadable history leaves the current chat unchanged.
 
 cc-connect rotates to a fresh session automatically after long inactivity:
 

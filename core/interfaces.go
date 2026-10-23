@@ -416,6 +416,18 @@ type HistoryProvider interface {
 	GetSessionHistory(ctx context.Context, sessionID string, limit int) ([]HistoryEntry, error)
 }
 
+// SessionRecoveryProvider exports readable context without resuming or modifying
+// the original backend session. Opaque backend state must never be returned.
+type SessionRecoveryProvider interface {
+	CanRecoverSession(err error) bool
+	GetSessionRecoveryContext(ctx context.Context, sessionID string) (SessionRecoveryContext, error)
+}
+
+type SessionRecoveryContext struct {
+	Text      string
+	Truncated bool
+}
+
 // ProviderConfig holds API provider settings for an agent.
 type ProviderConfig struct {
 	Name     string

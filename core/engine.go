@@ -3161,6 +3161,10 @@ func (e *Engine) maybeAutoResetSessionOnIdle(p Platform, msg *Message, sessions 
 	if e.resetOnIdle <= 0 || session == nil {
 		return nil
 	}
+	// A first-turn failure must not let idle rotation discard prepared recovery.
+	if session.hasRecoveryContext() {
+		return nil
+	}
 
 	hasBackend := session.GetAgentSessionID() != ""
 	hasHistory := len(session.GetHistory(1)) > 0
@@ -3902,6 +3906,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	}
 
 	promptContent := e.buildSenderPrompt(msg.Content, msg.UserID, msg.UserName, msg.Platform, msg.SessionKey, msg.ChannelKey)
+	promptContent = session.withRecoveryContext(promptContent)
 
 	sendStart := time.Now()
 	state.mu.Lock()
@@ -5966,6 +5971,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 							}
 						}
 					}
+					session.clearRecoveryContext()
 					sessions.Save()
 				}
 			}
@@ -6526,7 +6532,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				if session.GetAgentSessionID() == "" || agentErrorIsUnrecoverable(errMsg) {
 					hintKey = MsgErrorFreshNext
 				}
-				e.send(p, replyCtx, userMsg+"\n"+e.i18n.T(hintKey))
+				if !e.sendSessionRecoveryOffer(p, replyCtx, state.agent, session, userMsg, event.Error) {
+					e.send(p, replyCtx, userMsg+"\n"+e.i18n.T(hintKey))
+				}
 			}
 			// Only drop queued messages if the agent session is dead.
 			// Some agents (e.g. Codex) emit EventError for per-turn failures
@@ -6711,6 +6719,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 
 		e.i18n.DetectAndSet(queued.content)
 		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)
+		prompt = session.withRecoveryContext(prompt)
 
 		state.mu.Lock()
 		as := state.agentSession // capture under lock to avoid race with cleanup (mirrors #1436)
@@ -6755,6 +6764,7 @@ var builtinCommands = []struct {
 	id    string
 }{
 	{[]string{"new"}, "new"},
+	{[]string{"recover"}, "recover"},
 	{[]string{"list", "sessions"}, "list"},
 	{[]string{"switch"}, "switch"},
 	{[]string{"name", "rename"}, "name"},
@@ -6955,6 +6965,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	switch cmdID {
 	case "new":
 		e.cmdNew(p, msg, args)
+	case "recover":
+		e.cmdRecover(p, msg, args)
 	case "list":
 		e.cmdList(p, msg, args)
 	case "switch":
@@ -9804,6 +9816,7 @@ func helpCardGroups() []helpCardGroup {
 			titleKey: MsgHelpSessionSection,
 			items: []helpCardItem{
 				{command: "/new", action: "act:/new"},
+				{command: "/recover", action: "cmd:/recover"},
 				{command: "/cancel", action: "cmd:/cancel"},
 				{command: "/list", action: "nav:/list"},
 				{command: "/current", action: "nav:/current"},
@@ -12473,6 +12486,14 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 			}
 		}
 		return e.renderListCardSafe(sessionKey, page)
+	case "/list-recover":
+		page := 1
+		if args != "" {
+			if n, err := strconv.Atoi(args); err == nil && n > 0 {
+				page = n
+			}
+		}
+		return e.renderRecoveryModeCardSafe(sessionKey, page)
 	case "/dir":
 		page := 1
 		if args != "" {
@@ -13579,19 +13600,7 @@ func (e *Engine) renderListCard(sessionKey string, page int) (*Card, error) {
 		if s.ID == activeAgentID {
 			marker = "▶"
 		}
-		displayName := sessions.GetSessionName(s.ID)
-		if displayName != "" {
-			displayName = "📌 " + displayName
-		} else {
-			displayName = strings.ReplaceAll(s.Summary, "\n", " ")
-			displayName = strings.Join(strings.Fields(displayName), " ")
-			if displayName == "" {
-				displayName = e.i18n.T(MsgListEmptySummary)
-			}
-			if len([]rune(displayName)) > 40 {
-				displayName = string([]rune(displayName)[:40]) + "…"
-			}
-		}
+		displayName := e.sessionListDisplayName(sessions, &agentSessions[i])
 		btnType := "default"
 		if s.ID == activeAgentID {
 			btnType = "primary"
@@ -13604,7 +13613,11 @@ func (e *Engine) renderListCard(sessionKey string, page int) (*Card, error) {
 		)
 	}
 
+	// 只有支持导出可读上下文的 Agent 才显示恢复模式入口。
 	var navBtns []CardButton
+	if _, ok := agent.(SessionRecoveryProvider); ok {
+		navBtns = append(navBtns, DefaultBtn(e.i18n.T(MsgRecoveryModeDesc), fmt.Sprintf("nav:/list-recover %d", page)))
+	}
 	if page > 1 {
 		navBtns = append(navBtns, e.cardPrevButton(fmt.Sprintf("nav:/list %d", page-1)))
 	}

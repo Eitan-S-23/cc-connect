@@ -25,11 +25,15 @@ const ExplicitActivationTTL = 7 * 24 * time.Hour
 
 // Session tracks one conversation between a user and the agent.
 type Session struct {
-	ID                  string         `json:"id"`
-	Name                string         `json:"name"`
-	AgentSessionID      string         `json:"agent_session_id"`
-	AgentType           string         `json:"agent_type,omitempty"`
-	PastAgentSessionIDs []string       `json:"past_agent_session_ids,omitempty"`
+	ID                  string   `json:"id"`
+	Name                string   `json:"name"`
+	AgentSessionID      string   `json:"agent_session_id"`
+	AgentType           string   `json:"agent_type,omitempty"`
+	PastAgentSessionIDs []string `json:"past_agent_session_ids,omitempty"`
+	// RecoveryContext is a pending readable export, not backend encrypted state.
+	// Retain it until a successful turn has a durable backend session ID.
+	RecoveredFrom   string `json:"recovered_from,omitempty"`
+	RecoveryContext string `json:"recovery_context,omitempty"`
 	// ActiveProvider is the agent provider name that was active when this
 	// session last took a turn. It is restored before --resume so that a
 	// cc-connect process restart does not silently drop a user's
@@ -597,6 +601,31 @@ func (sm *SessionManager) SessionKeyMap() (idToKey map[string]string, activeIDs 
 	return
 }
 
+// FindLocalByAgentSessionID returns the local session of userKey currently
+// bound to agentSessionID, or nil when that backend session has no local
+// record. Used to carry over per-session settings (provider choice) when a
+// recovery targets a session other than the active one.
+func (sm *SessionManager) FindLocalByAgentSessionID(userKey, agentSessionID string) *Session {
+	if agentSessionID == "" {
+		return nil
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	for _, sid := range sm.userSessions[userKey] {
+		s := sm.sessions[sid]
+		if s == nil {
+			continue
+		}
+		s.mu.Lock()
+		matched := s.AgentSessionID == agentSessionID
+		s.mu.Unlock()
+		if matched {
+			return s
+		}
+	}
+	return nil
+}
+
 // FindByID looks up a session by its internal ID across all users.
 func (sm *SessionManager) FindByID(id string) *Session {
 	sm.mu.RLock()
@@ -685,6 +714,9 @@ func (sm *SessionManager) saveLocked() {
 			AgentSessionID:      agentSID,
 			AgentType:           s.AgentType,
 			PastAgentSessionIDs: append([]string(nil), s.PastAgentSessionIDs...),
+			RecoveredFrom:       s.RecoveredFrom,
+			RecoveryContext:     s.RecoveryContext,
+			ActiveProvider:      s.ActiveProvider,
 			History:             append([]HistoryEntry(nil), s.History...),
 			CreatedAt:           s.CreatedAt,
 			UpdatedAt:           s.UpdatedAt,
@@ -876,7 +908,7 @@ func (sm *SessionManager) PruneDuplicateSessions(mergeHistory bool) PruneResult 
 	defer sm.mu.Unlock()
 
 	// Group sessions by baseChat
-	chatSessions := make(map[string][]*Session) // baseChat -> sessions
+	chatSessions := make(map[string][]*Session)  // baseChat -> sessions
 	sessionToBaseChat := make(map[string]string) // session.ID -> baseChat
 
 	for userKey, sessionIDs := range sm.userSessions {

@@ -218,6 +218,25 @@ const (
 	MsgError                     MsgKey = "error"
 	MsgErrorResumeNext           MsgKey = "error_resume_next"
 	MsgErrorFreshNext            MsgKey = "error_fresh_next"
+	MsgRecoveryTitle             MsgKey = "recovery_title"
+	MsgRecoveryDescription       MsgKey = "recover"
+	MsgRecoveryOffer             MsgKey = "recovery_offer"
+	MsgRecoveryButton            MsgKey = "recovery_button"
+	MsgRecoveryUnsupported       MsgKey = "recovery_unsupported"
+	MsgRecoveryStale             MsgKey = "recovery_stale"
+	MsgRecoveryNoSession         MsgKey = "recovery_no_session"
+	MsgRecoveryFailed            MsgKey = "recovery_failed"
+	MsgRecoveryEmpty             MsgKey = "recovery_empty"
+	MsgRecoveryReady             MsgKey = "recovery_ready"
+	MsgRecoveryTruncated         MsgKey = "recovery_truncated"
+	MsgRecoveryTargetNotFound    MsgKey = "recovery_target_not_found"
+	MsgRecoveryModeTitle         MsgKey = "recovery_mode_title"
+	MsgRecoveryModeTitlePaged    MsgKey = "recovery_mode_title_paged"
+	MsgRecoveryModeEnter         MsgKey = "recovery_mode_enter"
+	MsgRecoveryModeDesc          MsgKey = "recovery_mode_desc"
+	MsgRecoveryModeExit          MsgKey = "recovery_mode_exit"
+	MsgRecoveryModeButton        MsgKey = "recovery_mode_button"
+	MsgRecoveryModeHint          MsgKey = "recovery_mode_hint"
 	MsgSessionNotFound           MsgKey = "session_not_found"
 	MsgFailedToStartAgentSession MsgKey = "failed_to_start_agent_session"
 	MsgFailedToDeleteSession     MsgKey = "failed_to_delete_session"
@@ -877,6 +896,139 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "❌ エラー: %v",
 		LangSpanish:            "❌ Error: %v",
 	},
+	MsgRecoveryTitle: {
+		LangEnglish:            "Session Recovery",
+		LangChinese:            "会话恢复",
+		LangTraditionalChinese: "會話恢復",
+		LangJapanese:           "セッションの復旧",
+		LangSpanish:            "Recuperación de sesión",
+	},
+	MsgRecoveryDescription: {
+		LangEnglish:            "Start fresh with readable context and preserve original records",
+		LangChinese:            "保留原始记录，将可读上下文迁入新会话",
+		LangTraditionalChinese: "保留原始記錄，將可讀上下文遷入新會話",
+		LangJapanese:           "元の記録を保ち、読み取り可能な文脈で新規開始",
+		LangSpanish:            "Iniciar con contexto legible y conservar los registros originales",
+	},
+	MsgRecoveryOffer: {
+		LangEnglish:            "The backend rejected encrypted history. Retrying or forking may repeat this error. Use `/recover %s` or the button below to prepare a fresh session with readable context. Original records and encrypted content remain unchanged; old encrypted state is not replayed. No task is retried automatically.",
+		LangChinese:            "后端拒绝了历史加密内容，重试或 fork 可能继续报错。发送 `/recover %s` 或点击按钮，保留可读上下文并切到全新会话。原始记录和密文不作修改，新请求不回传旧加密状态；不会自动重跑任务。",
+		LangTraditionalChinese: "後端拒絕了歷史加密內容，重試或 fork 可能繼續報錯。傳送 `/recover %s` 或點擊按鈕，保留可讀上下文並切到全新會話。原始記錄和密文不作修改，新請求不回傳舊加密狀態；不會自動重跑任務。",
+		LangJapanese:           "バックエンドが暗号化された履歴を拒否しました。再試行や fork でも同じエラーになる可能性があります。`/recover %s` または下のボタンで、読み取り可能な文脈を新しいセッションへ移します。元の記録と暗号文は変更せず、古い暗号化状態は再送しません。タスクは自動再実行しません。",
+		LangSpanish:            "El servidor rechazó el historial cifrado. Reintentar o bifurcar puede repetir el error. Usa `/recover %s` o el botón para preparar una sesión nueva con contexto legible. Los registros y el contenido cifrado originales no se modifican ni se reenvía el estado cifrado anterior. No se repite ninguna tarea automáticamente.",
+	},
+	MsgRecoveryButton: {
+		LangEnglish:            "Keep History and Start Fresh",
+		LangChinese:            "保留历史并切新会话",
+		LangTraditionalChinese: "保留歷史並切新會話",
+		LangJapanese:           "履歴を保って新規開始",
+		LangSpanish:            "Conservar historial e iniciar nueva",
+	},
+	MsgRecoveryUnsupported: {
+		LangEnglish:            "This agent does not support readable-context recovery.",
+		LangChinese:            "当前 Agent 不支持可读上下文恢复。",
+		LangTraditionalChinese: "目前 Agent 不支援可讀上下文恢復。",
+		LangJapanese:           "このエージェントは読み取り可能な文脈の復旧に対応していません。",
+		LangSpanish:            "Este agente no admite recuperar el contexto legible.",
+	},
+	MsgRecoveryStale: {
+		LangEnglish:            "The active session has changed. This recovery action was ignored. Use /recover for the current session.",
+		LangChinese:            "当前会话已改变，本次恢复操作未执行。可发送 /recover 恢复当前会话。",
+		LangTraditionalChinese: "目前會話已改變，本次恢復操作未執行。可傳送 /recover 恢復目前會話。",
+		LangJapanese:           "現在のセッションが変わったため、この復旧操作は実行しませんでした。現在のセッションには /recover を使用してください。",
+		LangSpanish:            "La sesión activa cambió; se ignoró esta recuperación. Usa /recover para la sesión actual.",
+	},
+	MsgRecoveryNoSession: {
+		LangEnglish:            "There is no backend session to recover. Send your next message to start a fresh conversation.",
+		LangChinese:            "当前没有可恢复的后端会话，直接发送下一条消息即可开启新对话。",
+		LangTraditionalChinese: "目前沒有可恢復的後端會話，直接傳送下一則訊息即可開啟新對話。",
+		LangJapanese:           "復旧するバックエンドセッションがありません。次のメッセージで新しい会話を開始できます。",
+		LangSpanish:            "No hay sesión del servidor que recuperar. Envía el siguiente mensaje para iniciar una conversación nueva.",
+	},
+	MsgRecoveryFailed: {
+		LangEnglish:            "Could not prepare recovery: %s. The current session and original records were not changed.",
+		LangChinese:            "恢复准备失败：%s。当前会话及原始记录未作修改。",
+		LangTraditionalChinese: "恢復準備失敗：%s。目前會話及原始記錄未作修改。",
+		LangJapanese:           "復旧の準備に失敗しました: %s。現在のセッションと元の記録は変更していません。",
+		LangSpanish:            "No se pudo preparar la recuperación: %s. La sesión actual y los registros originales no cambiaron.",
+	},
+	MsgRecoveryEmpty: {
+		LangEnglish:            "No readable context was found. The current session was not changed; use /new if you want an empty conversation.",
+		LangChinese:            "未找到可读上下文，当前会话未改变。如需空白对话，请使用 /new。",
+		LangTraditionalChinese: "未找到可讀上下文，目前會話未改變。如需空白對話，請使用 /new。",
+		LangJapanese:           "読み取り可能な文脈がないため、セッションは変更していません。空の会話には /new を使用してください。",
+		LangSpanish:            "No se encontró contexto legible. La sesión no cambió; usa /new si quieres una conversación vacía.",
+	},
+	MsgRecoveryReady: {
+		LangEnglish:            "A fresh session is prepared with readable context from %s. Original history and encrypted content are unchanged. Your next message will include the recovered context. No model request has been made yet; connectivity is not verified and later provider errors remain possible.",
+		LangChinese:            "已准备全新会话，并保留来自 %s 的可读上下文。原始历史和密文未修改。下一条消息将携带恢复上下文；尚未发起模型请求或验证连通性，也不能保证中转以后不再报错。",
+		LangTraditionalChinese: "已準備全新會話，並保留來自 %s 的可讀上下文。原始歷史和密文未修改。下一則訊息將攜帶恢復上下文；尚未發起模型請求或驗證連通性，也不能保證中轉以後不再報錯。",
+		LangJapanese:           "%s の読み取り可能な文脈を含む新しいセッションを準備しました。元の履歴と暗号文は変更していません。次のメッセージに復旧した文脈を添付します。モデルへの要求と接続確認はまだ行っておらず、その後のプロバイダーエラーは起こり得ます。",
+		LangSpanish:            "Se preparó una sesión nueva con contexto legible de %s. El historial y el contenido cifrado originales no cambiaron. El próximo mensaje incluirá el contexto recuperado. Aún no se hizo ninguna solicitud al modelo ni se verificó la conexión; pueden ocurrir errores posteriores del proveedor.",
+	},
+	MsgRecoveryTruncated: {
+		LangEnglish:            "The source history was compacted or exceeded the recovery limit. The initial request and recent readable context are prioritized; this is not a lossless copy. Full original records remain available locally.",
+		LangChinese:            "源历史曾被压缩或超过恢复大小限制，优先保留初始需求和近期可读上下文，并非无损复制；完整原始记录仍保留在本机。",
+		LangTraditionalChinese: "來源歷史曾被壓縮或超過恢復大小限制，優先保留初始需求和近期可讀上下文，並非無損複製；完整原始記錄仍保留在本機。",
+		LangJapanese:           "元の履歴は圧縮済み、または復旧サイズ上限を超えています。最初の依頼と最近の読み取り可能な文脈を優先しており、完全な複製ではありません。元の記録はローカルに残っています。",
+		LangSpanish:            "El historial original fue compactado o superó el límite. Se priorizan la solicitud inicial y el contexto legible reciente; no es una copia sin pérdidas. Los registros originales completos siguen disponibles localmente.",
+	},
+	MsgRecoveryTargetNotFound: {
+		LangEnglish:            "No session matched `%s` in the current list. Send /list first, then use the row number or an ID prefix.",
+		LangChinese:            "当前会话列表中没有匹配 `%s` 的会话。请先发送 /list，再用行号或 ID 前缀指定。",
+		LangTraditionalChinese: "目前會話列表中沒有符合 `%s` 的會話。請先傳送 /list，再用列號或 ID 前綴指定。",
+		LangJapanese:           "現在のセッション一覧に `%s` に一致するセッションがありません。先に /list を送信し、行番号または ID の先頭で指定してください。",
+		LangSpanish:            "Ninguna sesión coincide con `%s` en la lista actual. Envía /list primero y usa el número de fila o un prefijo de ID.",
+	},
+	MsgRecoveryModeTitle: {
+		LangEnglish:            "Recover Session — %s (%d)",
+		LangChinese:            "恢复会话 — %s (%d)",
+		LangTraditionalChinese: "恢復會話 — %s (%d)",
+		LangJapanese:           "セッション復旧 — %s (%d)",
+		LangSpanish:            "Recuperar sesión — %s (%d)",
+	},
+	MsgRecoveryModeTitlePaged: {
+		LangEnglish:            "Recover Session — %s (%d) · %d/%d",
+		LangChinese:            "恢复会话 — %s (%d) · 第 %d/%d 页",
+		LangTraditionalChinese: "恢復會話 — %s (%d) · 第 %d/%d 頁",
+		LangJapanese:           "セッション復旧 — %s (%d) · %d/%d ページ",
+		LangSpanish:            "Recuperar sesión — %s (%d) · Página %d/%d",
+	},
+	MsgRecoveryModeDesc: {
+		LangEnglish:            "Recovery mode",
+		LangChinese:            "恢复模式",
+		LangTraditionalChinese: "恢復模式",
+		LangJapanese:           "復旧モード",
+		LangSpanish:            "Modo de recuperación",
+	},
+	MsgRecoveryModeEnter: {
+		LangEnglish:            "Recovery mode: pick the session whose readable context should move into a fresh session",
+		LangChinese:            "恢复模式：选择要把可读上下文迁入全新会话的源会话",
+		LangTraditionalChinese: "恢復模式：選擇要把可讀上下文遷入全新會話的來源會話",
+		LangJapanese:           "復旧モード: 読み取り可能な文脈を新しいセッションへ移す元セッションを選択",
+		LangSpanish:            "Modo de recuperación: elige la sesión cuyo contexto legible se moverá a una sesión nueva",
+	},
+	MsgRecoveryModeExit: {
+		LangEnglish:            "Back to session list",
+		LangChinese:            "返回会话列表",
+		LangTraditionalChinese: "返回會話列表",
+		LangJapanese:           "セッション一覧に戻る",
+		LangSpanish:            "Volver a la lista de sesiones",
+	},
+	MsgRecoveryModeButton: {
+		LangEnglish:            "Recover",
+		LangChinese:            "恢复",
+		LangTraditionalChinese: "恢復",
+		LangJapanese:           "復旧",
+		LangSpanish:            "Recuperar",
+	},
+	MsgRecoveryModeHint: {
+		LangEnglish:            "Original records and encrypted content stay untouched; a brand-new session is created and no task is retried.",
+		LangChinese:            "原始记录与密文保持不变；会创建全新会话，且不会自动重跑任务。",
+		LangTraditionalChinese: "原始記錄與密文保持不變；會建立全新會話，且不會自動重跑任務。",
+		LangJapanese:           "元の記録と暗号文は変更せず、新しいセッションを作成します。タスクは自動再実行しません。",
+		LangSpanish:            "Los registros y el contenido cifrado no se modifican; se crea una sesión nueva y no se repite ninguna tarea.",
+	},
 	MsgErrorResumeNext: {
 		LangEnglish:            "🔁 Your next message will continue this same session; if it cannot be resumed, a new session will start automatically.",
 		LangChinese:            "🔁 下一条消息会接着本会话继续；若续接不上，会自动开启新会话。",
@@ -1146,6 +1298,7 @@ var messages = map[MsgKey]map[Language]string{
 	MsgHelp: {
 		LangEnglish: "📖 Available Commands\n\n" +
 			"/new [name]\n  Start a new session\n\n" +
+			"/recover [number|id-prefix|current-session-id]\n  Start fresh with readable context from that session; preserve original records\n\n" +
 			"/list\n  List agent sessions\n\n" +
 			"/search <keyword>\n  Search sessions by name or ID\n\n" +
 			"/switch <number>\n  Resume a session by its list number\n\n" +
@@ -1190,6 +1343,7 @@ var messages = map[MsgKey]map[Language]string{
 			"Permission modes: default / edit / plan / yolo",
 		LangChinese: "📖 可用命令\n\n" +
 			"/new [名称]\n  创建新会话\n\n" +
+			"/recover [序号|ID前缀|当前会话ID]\n  保留原始记录，将该会话的可读上下文迁入新会话\n\n" +
 			"/list\n  列出 Agent 会话列表\n\n" +
 			"/search <关键词>\n  搜索会话名称或 ID\n\n" +
 			"/switch <序号>\n  按列表序号切换会话\n\n" +
@@ -1234,6 +1388,7 @@ var messages = map[MsgKey]map[Language]string{
 			"权限模式：default / edit / plan / yolo",
 		LangTraditionalChinese: "📖 可用命令\n\n" +
 			"/new [名稱]\n  建立新會話\n\n" +
+			"/recover [序號|ID前綴|目前會話ID]\n  保留原始記錄，將該會話的可讀上下文遷入新會話\n\n" +
 			"/list\n  列出 Agent 會話列表\n\n" +
 			"/search <關鍵詞>\n  搜尋會話名稱或 ID\n\n" +
 			"/switch <序號>\n  按列表序號切換會話\n\n" +
@@ -1277,6 +1432,7 @@ var messages = map[MsgKey]map[Language]string{
 			"權限模式：default / edit / plan / yolo",
 		LangJapanese: "📖 利用可能なコマンド\n\n" +
 			"/new [名前]\n  新しいセッションを開始\n\n" +
+			"/recover [番号|ID接頭辞|現在のセッションID]\n  そのセッションの読み取り可能な文脈で、元の記録を保って新規開始\n\n" +
 			"/list\n  エージェントセッション一覧\n\n" +
 			"/switch <番号>\n  リスト番号でセッションを切り替え\n\n" +
 			"/delete <番号>|1,2,3|3-7|1,3-5,8\n  リスト番号でセッションを単体/複数削除\n\n" +
@@ -1319,6 +1475,7 @@ var messages = map[MsgKey]map[Language]string{
 			"権限モード: default / edit / plan / yolo",
 		LangSpanish: "📖 Comandos disponibles\n\n" +
 			"/new [nombre]\n  Iniciar una nueva sesión\n\n" +
+			"/recover [número|prefijo-de-id|id-de-sesión-actual]\n  Iniciar con contexto legible de esa sesión y conservar los registros originales\n\n" +
 			"/list\n  Listar sesiones del agente\n\n" +
 			"/switch <número>\n  Reanudar sesión por su número en la lista\n\n" +
 			"/delete <número>|1,2,3|3-7|1,3-5,8\n  Eliminar una o varias sesiones por número de lista\n\n" +
