@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 )
 
 type projectStateData struct {
+	NotifyEnabled           *bool             `json:"notify_enabled,omitempty"`
 	WorkDirOverride         string            `json:"work_dir_override,omitempty"`
 	WorkspaceDirOverrides   map[string]string `json:"workspace_dir_overrides,omitempty"`
 	WorkspaceModelOverrides map[string]string `json:"workspace_model_overrides,omitempty"`
@@ -27,6 +29,28 @@ func NewProjectStateStore(path string) *ProjectStateStore {
 		ps.load()
 	}
 	return ps
+}
+
+func (ps *ProjectStateStore) NotifyEnabled() (enabled, overridden bool) {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	if ps.state.NotifyEnabled == nil {
+		return false, false
+	}
+	return *ps.state.NotifyEnabled, true
+}
+
+// SetNotifyEnabled publishes the override only after it has been saved.
+func (ps *ProjectStateStore) SetNotifyEnabled(enabled bool) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	previous := ps.state.NotifyEnabled
+	ps.state.NotifyEnabled = &enabled
+	if err := ps.saveLocked(); err != nil {
+		ps.state.NotifyEnabled = previous
+		return err
+	}
+	return nil
 }
 
 func (ps *ProjectStateStore) WorkDirOverride() string {
@@ -112,26 +136,27 @@ func (ps *ProjectStateStore) ClearWorkDirOverride() {
 func (ps *ProjectStateStore) Save() {
 	ps.mu.RLock()
 	defer ps.mu.RUnlock()
-	ps.saveLocked()
+	if err := ps.saveLocked(); err != nil {
+		slog.Error("project_state: failed to save", "path", ps.storePath, "error", err)
+	}
 }
 
-func (ps *ProjectStateStore) saveLocked() {
+func (ps *ProjectStateStore) saveLocked() error {
 	if ps.storePath == "" {
-		return
+		return nil
 	}
 
 	data, err := json.MarshalIndent(ps.state, "", "  ")
 	if err != nil {
-		slog.Error("project_state: failed to marshal", "error", err)
-		return
+		return fmt.Errorf("project_state: marshal: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(ps.storePath), 0o755); err != nil {
-		slog.Error("project_state: failed to create dir", "path", ps.storePath, "error", err)
-		return
+		return fmt.Errorf("project_state: create dir: %w", err)
 	}
 	if err := AtomicWriteFile(ps.storePath, data, 0o644); err != nil {
-		slog.Error("project_state: failed to write", "path", ps.storePath, "error", err)
+		return fmt.Errorf("project_state: write: %w", err)
 	}
+	return nil
 }
 
 func (ps *ProjectStateStore) load() {

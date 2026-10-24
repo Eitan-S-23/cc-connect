@@ -34,6 +34,67 @@ Its internal sender is
 `allowMention` can only restrict the global `mention_user` setting; false
 selects an ordinary send instead of canceling the notification.
 
+## Per-Bot `/notify` Switch
+
+`/notify` displays the effective state and On/Off buttons. `/notify on` and
+`/notify off` set an explicit state, never invert it. These writes require
+the project's existing `admin_from` authorization. Viewing the state is
+allowed unless `notify` is disabled by project or user-role policy.
+
+The switch applies to the current project engine (the bot), across all its
+conversations and workspaces. Other project engines are unaffected. It controls
+extra completion, blocked and error notices, including heartbeat notices, not
+normal replies, permission buttons or questions. Existing trigger, mention,
+content and duration options are preserved. A bot bound to multiple platform
+accounts shares one project switch; use separate projects for independent bots.
+
+### Signatures and Storage
+
+    ProjectStateStore.NotifyEnabled() (enabled, overridden bool)
+    ProjectStateStore.SetNotifyEnabled(enabled bool) error
+    AuthenticatedCardNavigationHandler(action, sessionKey, userID string) *Card
+
+The existing per-project state JSON stores `"notify_enabled": true|false`.
+An absent field inherits global `attention_notify.enabled`; explicit false
+must not be omitted. No global TOML setting is changed. The setter saves
+atomically under the state lock and rolls back the in-memory override on error.
+Newly enabled bots retain the default triggers even when the global feature
+was disabled at startup. Notification send paths consult the effective state
+at delivery time, including after rate-limit waits. An API request already
+in flight when the switch changes cannot be recalled.
+
+### Validation and Error Matrix
+
+| Input / condition | Result |
+| --- | --- |
+| `/notify` | Current state and buttons; no write |
+| `/notify on` or `/notify off` from an admin | Save and apply to this bot immediately |
+| Repeated on/off | Same explicit state; no inversion |
+| Unknown or extra arguments | Usage and current state; no write |
+| Non-admin on/off or button click | Authorization error; no write |
+| Disabled command, including role policy | Rejected in text and card paths |
+| Failed state write | Error shown, previous state retained |
+| Restart after explicit off | Off restored even when the global default is on |
+
+### Card Identity and Tests
+
+Feishu returns the updated card through the existing callback response. The
+authenticated navigation capability passes the verified callback operator ID;
+the session key is routing context, not authorization. Platforms without this
+capability use normal command buttons (or a text fallback), not unsafe `act:`
+mutations. Other card navigation behavior is unchanged.
+
+Good: bot A is disabled from any of its chats while bot B keeps notifying.
+Base: no override exists and the global default remains effective.
+Bad: derive the clicker's permissions from the card owner's session key.
+Correct: authorize the callback operator, persist the project override, then
+render the effective state. Do not optimistically claim success before saving.
+
+Tests cover isolation, all-conversation scope, restart persistence, repeated
+commands, disabled global defaults, retained trigger options, invalid input,
+authorization in shared chats, storage failure rollback, all extra alert
+paths, concurrent access, localization, command menus and Feishu card updates.
+
 ## Heartbeat Completion Policy
 
 `ExecuteHeartbeat` sets `Message.FromHeartbeat`; foreground, queued and

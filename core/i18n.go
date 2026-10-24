@@ -707,6 +707,14 @@ const (
 	// messages sent so the user's device rings on platforms that stay silent
 	// for card edits and reactions (e.g. Feishu). See core/attention_notify.go.
 	MsgAttentionTurnComplete      MsgKey = "attention_turn_complete"
+	MsgNotifyTitle                MsgKey = "notify_title"
+	MsgNotifyStatus               MsgKey = "notify_status"
+	MsgNotifyOn                   MsgKey = "notify_on"
+	MsgNotifyOff                  MsgKey = "notify_off"
+	MsgNotifyUsage                MsgKey = "notify_usage"
+	MsgNotifySaved                MsgKey = "notify_saved"
+	MsgNotifySaveFailed           MsgKey = "notify_save_failed"
+	MsgBuiltinCmdNotify           MsgKey = "notify"
 	MsgAttentionBlockedPermission MsgKey = "attention_blocked_permission"
 	MsgAttentionBlockedQuestion   MsgKey = "attention_blocked_question"
 	MsgAttentionTurnFailed        MsgKey = "attention_turn_failed"
@@ -1050,6 +1058,62 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "⚠️ バックグラウンドタスクがツール `%s` の権限を要求しましたが、自動的に拒否されました（アクティブなユーザーターンなし）。メッセージを送信するか `/yolo` を使用して今後のリクエストを承認してください。",
 		LangSpanish:            "⚠️ Una tarea en segundo plano solicitó permiso para `%s` pero se denegó automáticamente (sin turno de usuario activo). Envía un mensaje o usa `/yolo` para aprobar solicitudes futuras.",
 	},
+	MsgNotifyTitle: {
+		LangEnglish:            "Attention Alerts",
+		LangChinese:            "主动提醒",
+		LangTraditionalChinese: "主動提醒",
+		LangJapanese:           "通知設定",
+		LangSpanish:            "Avisos de atención",
+	},
+	MsgNotifyStatus: {
+		LangEnglish:            "Bot/project: **%s**\nAttention alerts: **%s**\n\nApplies to all conversations of this bot only. Controls extra completion, blocked and error notices; normal replies, permission buttons and questions are unchanged.",
+		LangChinese:            "机器人/项目：**%s**\n主动提醒：**%s**\n\n仅影响该机器人的所有会话，其他机器人不受影响。控制完成、受阻、出错时的额外提醒；普通回复、权限按钮和提问不变。",
+		LangTraditionalChinese: "機器人/專案：**%s**\n主動提醒：**%s**\n\n僅影響此機器人的所有對話，其他機器人不受影響。控制完成、受阻、出錯時的額外提醒；一般回覆、權限按鈕和提問不變。",
+		LangJapanese:           "ボット/プロジェクト: **%s**\n通知: **%s**\n\nこのボットの全会話にのみ適用。他のボットには影響しません。完了・入力待ち・エラーの追加通知を制御し、通常の応答・承認ボタン・質問は変更しません。",
+		LangSpanish:            "Bot/proyecto: **%s**\nAvisos: **%s**\n\nSolo afecta a todas las conversaciones de este bot. Controla los avisos adicionales de finalización, bloqueo y error; no cambia las respuestas, los permisos ni las preguntas.",
+	},
+	MsgNotifyOn: {
+		LangEnglish:            "On",
+		LangChinese:            "开启提醒",
+		LangTraditionalChinese: "開啟提醒",
+		LangJapanese:           "通知オン",
+		LangSpanish:            "Activados",
+	},
+	MsgNotifyOff: {
+		LangEnglish:            "Off",
+		LangChinese:            "关闭提醒",
+		LangTraditionalChinese: "關閉提醒",
+		LangJapanese:           "通知オフ",
+		LangSpanish:            "Desactivados",
+	},
+	MsgNotifyUsage: {
+		LangEnglish:            "Usage: /notify or /notify on|off. Changes require an admin, apply immediately, and survive restarts.",
+		LangChinese:            "用法：/notify 或 /notify on|off。开关需管理员操作，即时生效，重启后保留。",
+		LangTraditionalChinese: "用法：/notify 或 /notify on|off。開關需管理員操作，即時生效，重新啟動後保留。",
+		LangJapanese:           "使い方: /notify または /notify on|off。変更は管理者のみ。即時反映され、再起動後も保持します。",
+		LangSpanish:            "Uso: /notify o /notify on|off. Solo un administrador puede cambiarlo; se aplica al instante y persiste tras reinicios.",
+	},
+	MsgNotifySaved: {
+		LangEnglish:            "Saved and applied to this bot only.",
+		LangChinese:            "已保存并生效，仅影响当前机器人。",
+		LangTraditionalChinese: "已儲存並生效，僅影響目前機器人。",
+		LangJapanese:           "保存して適用しました。このボットのみが対象です。",
+		LangSpanish:            "Guardado y aplicado solo a este bot.",
+	},
+	MsgNotifySaveFailed: {
+		LangEnglish:            "Could not save the setting. The previous state is unchanged; check the service logs.",
+		LangChinese:            "设置保存失败，原状态未改变，请检查服务日志。",
+		LangTraditionalChinese: "設定儲存失敗，原狀態未改變，請檢查服務日誌。",
+		LangJapanese:           "保存に失敗しました。元の設定は変更されていません。サービスログを確認してください。",
+		LangSpanish:            "No se pudo guardar. El estado anterior no ha cambiado; consulta los registros del servicio.",
+	},
+	MsgBuiltinCmdNotify: {
+		LangEnglish:            "Manage this bot's attention alerts (/notify [on|off])",
+		LangChinese:            "当前机器人主动提醒开关（/notify [on|off]）",
+		LangTraditionalChinese: "目前機器人主動提醒開關（/notify [on|off]）",
+		LangJapanese:           "このボットの通知設定（/notify [on|off]）",
+		LangSpanish:            "Gestionar avisos de este bot (/notify [on|off])",
+	},
 	MsgAttentionTurnComplete: {
 		LangEnglish:            "🔔 Done — the agent finished this round of work.",
 		LangChinese:            "🔔 完成 —— Agent 已结束本轮工作。",
@@ -1322,6 +1386,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/cron [add|list|exec|del|enable|disable]\n  Manage scheduled tasks\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  Manage one-shot timers\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  Manage heartbeat\n\n" +
+			"/notify [on|off]\n  Manage attention alerts for this bot only\n\n" +
 			"/commands [add|del]\n  Manage custom slash commands\n\n" +
 			"/alias [add|del]\n  Manage command aliases (e.g. 帮助 → /help)\n\n" +
 			"/skills\n  List agent skills (from SKILL.md)\n\n" +
@@ -1367,6 +1432,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/cron [add|list|exec|del|enable|disable]\n  管理定时任务\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  管理一次性定时器\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  管理心跳\n\n" +
+			"/notify [on|off]\n  当前机器人主动提醒开关\n\n" +
 			"/commands [add|del]\n  管理自定义命令\n\n" +
 			"/alias [add|del]\n  管理命令别名（如 帮助 → /help）\n\n" +
 			"/skills\n  列出 Agent Skills（来自 SKILL.md）\n\n" +
@@ -1411,6 +1477,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/cron [add|list|exec|del|enable|disable]\n  管理定時任務\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  管理一次性定時器\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  管理心跳\n\n" +
+			"/notify [on|off]\n  目前機器人主動提醒開關\n\n" +
 			"/commands [add|del]\n  管理自訂命令\n\n" +
 			"/alias [add|del]\n  管理命令別名（如 幫助 → /help）\n\n" +
 			"/skills\n  列出 Agent Skills（來自 SKILL.md）\n\n" +
@@ -1454,6 +1521,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/cron [add|list|exec|del|enable|disable]\n  スケジュールタスク管理\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  ワンショットタイマー管理\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  ハートビート管理\n\n" +
+			"/notify [on|off]\n  このボットの通知設定\n\n" +
 			"/commands [add|del]\n  カスタムコマンド管理\n\n" +
 			"/alias [add|del]\n  コマンドエイリアス管理（例: ヘルプ → /help）\n\n" +
 			"/skills\n  エージェントスキル一覧（SKILL.md から）\n\n" +
@@ -1497,6 +1565,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/cron [add|list|exec|del|enable|disable]\n  Gestionar tareas programadas\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  Gestionar temporizadores de uso único\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  Gestionar heartbeat\n\n" +
+			"/notify [on|off]\n  Gestionar avisos de este bot\n\n" +
 			"/commands [add|del]\n  Gestionar comandos personalizados\n\n" +
 			"/alias [add|del]\n  Gestionar alias de comandos (ej. ayuda → /help)\n\n" +
 			"/skills\n  Listar skills del agente (desde SKILL.md)\n\n" +

@@ -24,7 +24,24 @@ env:
   CMD: ./cmd/cc-connect
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: 验证核心、配置、飞书与命令入口
+        run: go test -race -tags no_web ./core ./config ./platform/feishu ./cmd/cc-connect
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -147,6 +164,6 @@ jobs:
             gh release create "$TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" \
-              --notes "fork 构建：基于 chenhg5/cc-connect 的本地改动（attention-notify、codex 进程树守卫、会话落盘修复、app-server stdio 修复）。" \
+              --notes "fork 构建：新增单机器人 /notify 卡片及 on/off 开关，状态持久保存、即时生效，不影响其他机器人。包含 attention-notify、codex 进程树守卫、会话落盘修复和 app-server stdio 修复。" \
               --prerelease
           fi

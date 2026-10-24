@@ -132,17 +132,18 @@ type Platform struct {
 	shareSessionInChannel      bool
 	threadIsolation            bool
 	// noReplyToTrigger: when true, send via Create instead of Im.Message.Reply (no quote to the user's message).
-	noReplyToTrigger bool
-	resolveMentions  bool
-	client           *lark.Client
-	replayClient     *lark.Client
-	replayClientMu   sync.Mutex
-	wsClient         *larkws.Client
-	handler          core.MessageHandler
-	cardNavHandler   core.CardNavigationHandler
-	cancel           context.CancelFunc
-	dedup            *core.MessageDedup
-	botOpenID        string
+	noReplyToTrigger            bool
+	resolveMentions             bool
+	client                      *lark.Client
+	replayClient                *lark.Client
+	replayClientMu              sync.Mutex
+	wsClient                    *larkws.Client
+	handler                     core.MessageHandler
+	cardNavHandler              core.CardNavigationHandler
+	authenticatedCardNavHandler core.AuthenticatedCardNavigationHandler
+	cancel                      context.CancelFunc
+	dedup                       *core.MessageDedup
+	botOpenID                   string
 	// groupFilterDegraded is true when bot open_id discovery failed at startup
 	// (e.g. transient network/DNS/proxy outage). When true, group chat mention
 	// filtering fails closed (silently drops group messages without @bot) instead
@@ -313,6 +314,10 @@ type feishuRequestFunc func(client *lark.Client, options ...larkcore.RequestOpti
 
 func (p *Platform) SetCardNavigationHandler(h core.CardNavigationHandler) {
 	p.cardNavHandler = h
+}
+
+func (p *Platform) SetAuthenticatedCardNavigationHandler(h core.AuthenticatedCardNavigationHandler) {
+	p.authenticatedCardNavHandler = h
 }
 
 func New(opts map[string]any) (core.Platform, error) {
@@ -780,6 +785,11 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 	if event.Event.Operator != nil {
 		userID = event.Event.Operator.OpenID
 	}
+	if strings.HasPrefix(actionVal, "act:/notify") || strings.HasPrefix(actionVal, "nav:/notify") {
+		if userID == "" || !core.AllowList(p.allowFrom, userID) {
+			return nil, nil
+		}
+	}
 	chatID := ""
 	messageID := ""
 	if event.Event.Context != nil {
@@ -811,10 +821,14 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 				},
 			}, nil
 		}
-		if p.cardNavHandler != nil {
+		if p.authenticatedCardNavHandler != nil || p.cardNavHandler != nil {
 			done := make(chan *core.Card, 1)
 			go func() {
-				done <- p.cardNavHandler(actionVal, sessionKey)
+				if p.authenticatedCardNavHandler != nil {
+					done <- p.authenticatedCardNavHandler(actionVal, sessionKey, userID)
+				} else {
+					done <- p.cardNavHandler(actionVal, sessionKey)
+				}
 			}()
 
 			select {

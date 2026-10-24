@@ -71,7 +71,7 @@ func (n *attentionTurn) finish(success, silent bool) {
 		success = false
 		n.failure = MsgAttentionStopped
 	}
-	cfg := n.engine.attentionNotify
+	cfg := n.engine.effectiveAttentionNotify()
 	allowMention := n.heartbeat == nil
 	if n.heartbeat != nil && success {
 		if silent || !n.heartbeat.hasReply {
@@ -123,7 +123,7 @@ func (n *attentionTurn) notifyBlocked(requestID, text string) {
 // turnDuration feeds the MinDuration threshold so short back-and-forth
 // exchanges stay quiet when the operator asked for that.
 func (e *Engine) notifyTurnComplete(p Platform, replyCtx any, userID, userName string, turnDuration time.Duration, allowMention bool) {
-	cfg := e.attentionNotify
+	cfg := e.effectiveAttentionNotify()
 	if !cfg.Enabled || !cfg.OnTurnComplete {
 		return
 	}
@@ -143,7 +143,7 @@ func (e *Engine) notifyTurnComplete(p Platform, replyCtx any, userID, userName s
 // tool that needs permission), because only the call site knows why the agent
 // blocked.
 func (e *Engine) notifyBlocked(p Platform, replyCtx any, userID, userName, text string, allowMention bool) {
-	cfg := e.attentionNotify
+	cfg := e.effectiveAttentionNotify()
 	if !cfg.Enabled || !cfg.OnBlocked {
 		return
 	}
@@ -166,7 +166,11 @@ func (e *Engine) notifyAttentionWithMention(p Platform, replyCtx any, userID, us
 	if p == nil || strings.TrimSpace(text) == "" {
 		return
 	}
-	mentionUser := e.attentionNotify.MentionUser && allowMention
+	cfg := e.effectiveAttentionNotify()
+	if !cfg.Enabled {
+		return
+	}
+	mentionUser := cfg.MentionUser && allowMention
 	if !mentionUser {
 		userID, userName = "", ""
 	}
@@ -180,6 +184,10 @@ func (e *Engine) notifyAttentionWithMention(p Platform, replyCtx any, userID, us
 			slog.Warn("attention notify: outgoing rate limit cancelled wait", "platform", p.Name(), "error", err)
 			return
 		}
+	}
+	// A command can disable alerts while this send waits for a rate-limit slot.
+	if !e.effectiveAttentionNotify().Enabled {
+		return
 	}
 
 	var err error

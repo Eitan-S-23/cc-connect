@@ -440,15 +440,16 @@ type Engine struct {
 	userRoles    *UserRoleManager // nil = legacy mode (no per-user policies)
 	userRolesMu  sync.RWMutex     // protects userRoles, disabledCmds, and adminFrom
 
-	rateLimiter      *RateLimiter
-	outgoingRL       *OutgoingRateLimiter
-	streamPreview    StreamPreviewCfg
-	instantReply     InstantReplyCfg
-	attentionNotify  AttentionNotifyCfg
-	references       ReferenceRenderCfg
-	relayManager     *RelayManager
-	eventIdleTimeout time.Duration
-	maxTurnTime      time.Duration // absolute wall-clock cap per turn (0 = disabled)
+	rateLimiter       *RateLimiter
+	outgoingRL        *OutgoingRateLimiter
+	streamPreview     StreamPreviewCfg
+	instantReply      InstantReplyCfg
+	attentionNotify   AttentionNotifyCfg
+	attentionNotifyMu sync.RWMutex
+	references        ReferenceRenderCfg
+	relayManager      *RelayManager
+	eventIdleTimeout  time.Duration
+	maxTurnTime       time.Duration // absolute wall-clock cap per turn (0 = disabled)
 	// agentSessionIdleTimeoutNanos 在单轮正常结束后关闭空闲的 live agent 进程，
 	// 同时保留已保存的 session ID，便于下次继续恢复。
 	agentSessionIdleTimeoutNanos atomic.Int64
@@ -816,6 +817,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		sendWorkDirs:          make(map[string]string),
 		platformReady:         make(map[Platform]bool),
 		startedAt:             time.Now(),
+		attentionNotify:       DefaultAttentionNotifyCfg(),
 		streamPreview:         DefaultStreamPreviewCfg(),
 		references:            DefaultReferenceRenderCfg(),
 		eventIdleTimeout:      defaultEventIdleTimeout,
@@ -959,6 +961,8 @@ func (e *Engine) SetInstantReply(cfg InstantReplyCfg) {
 
 // SetAttentionNotify configures the optional "the agent needs you" alert.
 func (e *Engine) SetAttentionNotify(cfg AttentionNotifyCfg) {
+	e.attentionNotifyMu.Lock()
+	defer e.attentionNotifyMu.Unlock()
 	e.attentionNotify = cfg
 }
 
@@ -1321,6 +1325,8 @@ func isPrivilegedCommandInvocation(cmdID string, args []string) bool {
 	}
 	sub := strings.ToLower(args[0])
 	switch cmdID {
+	case "notify":
+		return sub == "on" || sub == "off"
 	case "commands":
 		return matchSubCommand(sub, []string{
 			"list", "add", "addexec", "del", "delete", "rm", "remove",
@@ -2531,6 +2537,9 @@ func (e *Engine) initPlatformCapabilities(p Platform) {
 
 	if nav, ok := p.(CardNavigable); ok {
 		nav.SetCardNavigationHandler(e.handleCardNav)
+	}
+	if nav, ok := p.(AuthenticatedCardNavigable); ok {
+		nav.SetAuthenticatedCardNavigationHandler(e.handleAuthenticatedCardNav)
 	}
 }
 
@@ -6783,6 +6792,7 @@ var builtinCommands = []struct {
 	{[]string{"cron"}, "cron"},
 	{[]string{"timer", "at", "remind"}, "timer"},
 	{[]string{"heartbeat", "hb"}, "heartbeat"},
+	{[]string{"notify"}, "notify"},
 	{[]string{"compress", "compact"}, "compress"},
 	{[]string{"stop"}, "stop"},
 	{[]string{"cancel"}, "cancel"},
@@ -7003,6 +7013,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdTimer(p, msg, args)
 	case "heartbeat":
 		e.cmdHeartbeat(p, msg, args)
+	case "notify":
+		e.cmdNotify(p, msg, args)
 	case "compress":
 		e.cmdCompress(p, msg)
 	case "stop":
@@ -9839,6 +9851,7 @@ func helpCardGroups() []helpCardGroup {
 				{command: "/memory", action: "cmd:/memory"},
 				{command: "/allow", action: "cmd:/allow"},
 				{command: "/quiet", action: "cmd:/quiet"},
+				{command: "/notify", action: "cmd:/notify"},
 				{command: "/tts", action: "cmd:/tts"},
 			},
 		},

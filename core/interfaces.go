@@ -331,6 +331,14 @@ type CardNavigable interface {
 	SetCardNavigationHandler(h CardNavigationHandler)
 }
 
+// AuthenticatedCardNavigationHandler receives the verified callback actor,
+// which may differ from the owner encoded in a shared card's session key.
+type AuthenticatedCardNavigationHandler func(action, sessionKey, userID string) *Card
+
+type AuthenticatedCardNavigable interface {
+	SetAuthenticatedCardNavigationHandler(h AuthenticatedCardNavigationHandler)
+}
+
 // CardRefresher is an optional interface for platforms that can update a
 // previously rendered card in-place after the original callback has returned.
 // This is used when async operations (e.g. delete-mode deletion) need to
