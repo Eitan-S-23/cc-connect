@@ -895,7 +895,17 @@ func TestClose_ForceKillsProcessGroupAfterGracefulTimeout(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	waitForThreadID(t, cs, "thread-close")
+	// Consume the startup event before testing that Close leaves no late output.
+	// A closed buffered channel still delivers events queued before Close.
+	select {
+	case evt := <-cs.Events():
+		if evt.Type != core.EventSessionStarted || evt.SessionID != "thread-close" {
+			t.Fatalf("unexpected startup event: %#v", evt)
+		}
+	case <-time.After(5 * time.Second):
+		_ = cs.Close()
+		t.Fatal("timed out waiting for startup event")
+	}
 
 	closeStarted := time.Now()
 	if err := cs.Close(); err != nil {
