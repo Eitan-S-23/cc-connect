@@ -122,7 +122,7 @@ jobs:
               *) tar czf "$f.tar.gz" "$f" && rm -f "$f" ;;
             esac
           done
-          sha256sum * > checksums.txt
+          sha256sum -- * > checksums.txt
           ls -lh
 
       - name: 上传构建产物
@@ -149,7 +149,7 @@ jobs:
           cd dist
           # 各矩阵任务各自生成了 checksums.txt，这里按最终文件重算一份
           rm -f checksums.txt
-          sha256sum *.tar.gz *.zip > checksums.txt
+          sha256sum -- *.tar.gz *.zip > checksums.txt
           cat checksums.txt
 
       - name: 创建或更新 Release
