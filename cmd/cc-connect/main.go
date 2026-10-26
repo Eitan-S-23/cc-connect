@@ -207,11 +207,11 @@ var topLevelCommandHandlers = map[string]func([]string){
 		fmt.Print(ccconnect.ConfigExampleTOML)
 	},
 	"config": runConfig,
-	"update": func(_ []string) {
-		runUpdate()
+	"update": func(args []string) {
+		runUpdate(args)
 	},
-	"check-update": func(_ []string) {
-		checkUpdate()
+	"check-update": func(args []string) {
+		checkUpdate(args)
 	},
 	"provider":  runProviderCommand,
 	"send":      runSend,
@@ -250,7 +250,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	checkUpdateAsync()
 	// When started as a daemon (CC_LOG_FILE set), redirect logs to a rotating file.
 	// Log file setup happens before flag.Parse() so the rotating writer is in
 	// place before any slog output. To still honour --log-max-size, we
@@ -307,6 +306,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	checkUpdateAsync()
 	core.VersionInfo = fmt.Sprintf("cc-connect %s\ncommit: %s\nbuilt: %s", version, commit, buildTime)
 	core.CurrentVersion = version
 	core.CurrentCommit = commit
@@ -1695,7 +1695,7 @@ Commands:
     format           Format the config file (alias: fmt)
     path             Print the resolved config file path
 
-  update             Check for updates and upgrade the binary (--pre for beta)
+  update             Upgrade from the configured release repository (--check: check only)
   check-update       Check if a newer version is available
   config-example     (deprecated: use 'config example' instead)
 

@@ -40,6 +40,105 @@ import (
 	"time"
 )
 
+func TestCUJ_M1_ManualModelRemainsInListAfterSwitchAndRestart(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "project-state.json")
+	makeEngine := func() (*Engine, *stubPlatformEngine) {
+		p := &stubPlatformEngine{n: "test"}
+		e := NewEngine("manual-model", &stubModelModeAgent{model: "gpt-4.1"}, []Platform{p}, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
+		e.SetProjectStateStore(NewProjectStateStore(statePath))
+		t.Cleanup(func() { _ = e.Stop() })
+		return e, p
+	}
+	e, p := makeEngine()
+	send := func(id, content string) {
+		e.ReceiveMessage(p, &Message{SessionKey: "test:owner", Platform: "test", MessageID: id, UserID: "owner", Content: content, ReplyCtx: "ctx"})
+	}
+	send("select", "/model manual/rare-model")
+	p.clearSent()
+	send("show", "/model")
+	if text := strings.Join(p.getSent(), "\n"); !strings.Contains(text, ". manual/rare-model\n") {
+		t.Fatalf("selected model is missing from the numbered choices: %s", text)
+	}
+	send("switch-away", "/model gpt")
+	p.clearSent()
+	send("show-again", "/model")
+	if text := strings.Join(p.getSent(), "\n"); !strings.Contains(text, ". manual/rare-model\n") {
+		t.Fatalf("switching away forgot the manual choice: %s", text)
+	}
+	e, p = makeEngine()
+	send("after-restart", "/model")
+	if text := strings.Join(p.getSent(), "\n"); !strings.Contains(text, ". manual/rare-model\n") {
+		t.Fatalf("restarting forgot the manual choice: %s", text)
+	}
+	send("reselect", "/model 3")
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "Model switched to `manual/rare-model`") {
+		t.Fatal("numbered selection did not resolve the remembered model")
+	}
+}
+
+func TestCUJ_U1_ForkUpgradeChecksConfirmsAndRestarts(t *testing.T) {
+	oldVersion := CurrentVersion
+	CurrentVersion = "v1.5.1-beta.1+notify.1"
+	t.Cleanup(func() { CurrentVersion = oldVersion })
+	p := &stubPlatformEngine{n: "test"}
+	e := NewEngine("update-test", &stubAgent{}, []Platform{p}, filepath.Join(t.TempDir(), "sessions.json"), LangEnglish)
+	t.Cleanup(func() { _ = e.Stop() })
+	e.SetAdminFrom("owner")
+	if _, ok := e.releaseUpdates().(builtinReleaseUpdateService); !ok {
+		t.Fatal("engine is not wired to shared updater")
+	}
+	u := &recordingUpdateService{release: ReleaseInfo{TagName: "fork-v1.5.1-beta.1+autoretry.1"}, err: errors.New("checksum mismatch")}
+	e.updateService = u
+	send := func(id, user, content string) {
+		e.ReceiveMessage(p, &Message{SessionKey: "test:owner", Platform: "test", MessageID: id, UserID: user, Content: content, ReplyCtx: "ctx"})
+	}
+	assertNoRestart := func() {
+		t.Helper()
+		select {
+		case <-RestartCh:
+			t.Fatal("unexpected restart")
+		default:
+		}
+	}
+	assertNoRestart()
+
+	// A non-admin cannot install; checking as admin must not install either.
+	send("denied", "guest", "/upgrade confirm")
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "admin") || u.checks != 0 {
+		t.Fatal("upgrade permission bypass")
+	}
+	p.clearSent()
+	send("check", "owner", "/upgrade")
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), u.release.TagName) || len(u.installs) != 0 {
+		t.Fatal("check did not show the fork release")
+	}
+	assertNoRestart()
+
+	// Failed verification leaves the bot running and reports the failure.
+	p.clearSent()
+	send("failure", "owner", "/upgrade confirm")
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "checksum mismatch") {
+		t.Fatal("failed update was not reported")
+	}
+	assertNoRestart()
+
+	// Successful confirmation queues the original post-restart notification.
+	u.err = nil
+	p.clearSent()
+	send("success", "owner", "/update confirm")
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), u.release.TagName) || len(u.installs) != 2 || u.installs[1] != u.release.TagName {
+		t.Fatal("wrong install receipt or tag")
+	}
+	select {
+	case req := <-RestartCh:
+		if req.SessionKey != "test:owner" || req.Platform != "test" {
+			t.Fatal(req)
+		}
+	default:
+		t.Fatal("successful update did not request restart")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helper types: cujAgent + cujAgentSession give per-CUJ control over what the
 // agent "replies" for each user prompt, without bringing up a real LLM.

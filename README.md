@@ -442,9 +442,15 @@ npm install -g cc-connect
 brew upgrade cc-connect
 
 # Binary self-update
-cc-connect update           # Stable
-cc-connect update --pre     # Include pre-releases
+cc-connect update           # This fork, including pre-releases
+cc-connect update --check   # Check only, without installing
+cc-connect update --pre     # Retained compatibility flag
 ```
+
+This fork updates from `Eitan-S-23/cc-connect`, not the official npm/Homebrew
+channel. In chat, use `/upgrade` then `/upgrade confirm` to install and restart.
+Install an updater-enabled standalone fork binary once before using this path.
+See [fork update behavior and recovery](docs/fork-updates.md).
 
 
 ## 📊 Support Matrix

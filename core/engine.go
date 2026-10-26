@@ -389,6 +389,8 @@ type AttentionNotifyCfg struct {
 
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
+	transientModelCatalog *ProjectStateStore
+	updateService         releaseUpdateService
 	autoRetryMu           sync.Mutex
 	autoRetryRuns         map[string]*autoRetryRun
 	name                  string
@@ -801,6 +803,7 @@ func (pp *pendingPermission) resolve() {
 func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath string, lang Language) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
 	e := &Engine{
+		transientModelCatalog: NewProjectStateStore(""),
 		name:                  name,
 		agent:                 ag,
 		platforms:             platforms,
@@ -10137,7 +10140,7 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 		if !supportsCards(p) {
 			fetchCtx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 			defer cancel()
-			models := switcher.AvailableModels(fetchCtx)
+			models := e.availableModels(fetchCtx, agent)
 
 			var sb strings.Builder
 			current := switcher.GetModel()
@@ -10153,7 +10156,7 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 			var row []ButtonOption
 			for i, m := range models {
 				marker := "  "
-				if m.Name == current {
+				if strings.EqualFold(m.Name, current) {
 					marker = "> "
 				}
 				var line string
@@ -10172,7 +10175,7 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 				if m.Alias != "" {
 					label = m.Alias
 				}
-				if m.Name == current {
+				if strings.EqualFold(m.Name, current) {
 					label = "▶ " + label
 				}
 				row = append(row, ButtonOption{Text: label, Data: fmt.Sprintf("cmd:/model switch %d", i+1)})
@@ -10203,7 +10206,7 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 	if modelSwitchNeedsLookup(target) {
 		fetchCtx, cancel := context.WithTimeout(e.ctx, 10*time.Second)
 		defer cancel()
-		models := switcher.AvailableModels(fetchCtx)
+		models := e.availableModels(fetchCtx, agent)
 		target = resolveModelSwitchTarget(target, models)
 	}
 
@@ -10284,10 +10287,10 @@ func (e *Engine) switchModel(target string) (string, error) {
 	return e.switchModelOnAgent(e.agent, target, true)
 }
 
-// switchModelOnAgent applies a runtime model selection to the provided agent.
+// applyModelOnAgent applies a runtime model selection to the provided agent.
 // When persistConfig is true, config-backed model/provider changes are saved so
 // reloads keep the new default. Workspace-scoped runtime switches pass false.
-func (e *Engine) switchModelOnAgent(agent Agent, target string, persistConfig bool) (string, error) {
+func (e *Engine) applyModelOnAgent(agent Agent, target string, persistConfig bool) (string, error) {
 	switcher, ok := agent.(ModelSwitcher)
 	if !ok {
 		return target, nil
@@ -12594,7 +12597,7 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 
 func (e *Engine) handleModelCardAction(args, sessionKey string) *Card {
 	agent, sessions := e.sessionContextForKey(sessionKey)
-	switcher, ok := agent.(ModelSwitcher)
+	_, ok := agent.(ModelSwitcher)
 	if !ok {
 		return e.simpleCard(e.i18n.T(MsgCardTitleModel), "indigo", e.i18n.T(MsgModelNotSupported))
 	}
@@ -12606,7 +12609,7 @@ func (e *Engine) handleModelCardAction(args, sessionKey string) *Card {
 	target = strings.TrimSpace(target)
 	if modelSwitchNeedsLookup(target) {
 		fetchCtx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
-		models := switcher.AvailableModels(fetchCtx)
+		models := e.availableModels(fetchCtx, agent)
 		target = resolveModelSwitchTarget(target, models)
 		cancel()
 	}
@@ -12670,7 +12673,7 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 			return
 		}
 		agent, sessions := e.sessionContextForKey(sessionKey)
-		switcher, ok := agent.(ModelSwitcher)
+		_, ok := agent.(ModelSwitcher)
 		if !ok {
 			return
 		}
@@ -12682,7 +12685,7 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 		}
 		target = strings.TrimSpace(target)
 		if modelSwitchNeedsLookup(target) {
-			models := switcher.AvailableModels(fetchCtx)
+			models := e.availableModels(fetchCtx, agent)
 			target = resolveModelSwitchTarget(target, models)
 		}
 		cancel()
@@ -13465,7 +13468,7 @@ func (e *Engine) renderModelCard(sessionKey string) *Card {
 
 	fetchCtx, cancel := context.WithTimeout(e.ctx, 3*time.Second)
 	defer cancel()
-	models := switcher.AvailableModels(fetchCtx)
+	models := e.availableModels(fetchCtx, agent)
 	current := switcher.GetModel()
 
 	var sb strings.Builder
@@ -13486,7 +13489,7 @@ func (e *Engine) renderModelCard(sessionKey string) *Card {
 		}
 		val := fmt.Sprintf("act:/model switch %d", i+1)
 		opts = append(opts, CardSelectOption{Text: label, Value: val})
-		if m.Name == current {
+		if strings.EqualFold(m.Name, current) {
 			initVal = val
 		}
 	}
@@ -14292,9 +14295,8 @@ func (e *Engine) renderUpgradeCard() *Card {
 		err     error
 	}
 	ch := make(chan result, 1)
-	useGitee := e.i18n.IsZhLike()
 	go func() {
-		r, err := CheckForUpdate(cur, useGitee)
+		r, err := e.releaseUpdates().Check(cur, true)
 		ch <- result{r, err}
 	}()
 
@@ -15731,8 +15733,7 @@ func (e *Engine) cmdUpgrade(p Platform, msg *Message, args []string) {
 		return
 	}
 
-	useGitee := e.i18n.IsZhLike()
-	release, err := CheckForUpdate(cur, useGitee)
+	release, err := e.releaseUpdates().Check(cur, true)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return
@@ -15757,8 +15758,7 @@ func (e *Engine) cmdUpgradeConfirm(p Platform, msg *Message) {
 		return
 	}
 
-	useGitee := e.i18n.IsZhLike()
-	release, err := CheckForUpdate(cur, useGitee)
+	release, err := e.releaseUpdates().Check(cur, true)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return
@@ -15770,7 +15770,7 @@ func (e *Engine) cmdUpgradeConfirm(p Platform, msg *Message) {
 
 	e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgUpgradeDownloading), release.TagName))
 
-	if err := SelfUpdate(release.TagName, useGitee); err != nil {
+	if err := e.releaseUpdates().Install(release.TagName); err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 		return
 	}

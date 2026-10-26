@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/chenhg5/cc-connect/core"
 )
 
 func TestIsNewer(t *testing.T) {
@@ -60,14 +65,99 @@ func TestGetUpdateHintIfAvailable_NeverBlocks(t *testing.T) {
 	// getUpdateHintIfAvailable should return "" immediately on cache miss
 	// (async fetch is kicked off in background but does not block)
 	start := time.Now()
-	hint := getUpdateHintIfAvailable()
+	done := make(chan struct{})
+	hint := cachedUpdateHint(version, func(string, bool) (*core.ReleaseInfo, error) { defer close(done); return nil, nil })
 	elapsed := time.Since(start)
+	<-done
+	for {
+		cachedLatestVersion.mu.RLock()
+		running := cachedLatestVersion.checking
+		cachedLatestVersion.mu.RUnlock()
+		if !running {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 
 	if hint != "" {
 		t.Errorf("expected empty hint on cache miss, got: %q", hint)
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("getUpdateHintIfAvailable blocked for %v, should return immediately", elapsed)
+	}
+}
+
+func TestUpdateCommandUsesSharedForkCheckAndPinnedTag(t *testing.T) {
+	tag := "fork-v1.5.1-beta.1+autoretry.2"
+	for _, args := range [][]string{nil, {"--pre"}, {"--beta"}, {"--check"}} {
+		var out bytes.Buffer
+		calls := 0
+		err := runUpdateCommand(args, "v1.5.1-beta.1+notify.1", &out, func(current string, pre bool) (*core.ReleaseInfo, error) {
+			if current != "v1.5.1-beta.1+notify.1" {
+				t.Fatal(current)
+			}
+			wantPre := len(args) > 0 && args[0] != "--check"
+			if pre != wantPre {
+				t.Fatalf("pre=%v args=%v", pre, args)
+			}
+			return &core.ReleaseInfo{TagName: tag}, nil
+		}, func(got string) error {
+			calls++
+			if got != tag {
+				t.Fatal(got)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCalls := 1
+		if len(args) > 0 && args[0] == "--check" {
+			wantCalls = 0
+		}
+		if calls != wantCalls || !strings.Contains(out.String(), tag) {
+			t.Fatalf("calls=%d output=%s", calls, out.String())
+		}
+	}
+}
+
+func TestUpdateCommandFailureAndUnknownFlagsDoNotInstall(t *testing.T) {
+	for _, mode := range []string{"current", "check-error", "install-error", "unknown-flag"} {
+		var out bytes.Buffer
+		calls := 0
+		args := []string{}
+		if mode == "unknown-flag" {
+			args = []string{"--bogus"}
+		}
+		err := runUpdateCommand(args, "v1.0.0", &out, func(string, bool) (*core.ReleaseInfo, error) {
+			if mode == "current" {
+				return nil, nil
+			}
+			if mode == "check-error" {
+				return nil, errors.New("offline")
+			}
+			return &core.ReleaseInfo{TagName: "fork-v2.0.0"}, nil
+		}, func(string) error { calls++; return errors.New("checksum mismatch") })
+		if (err == nil) != (mode == "current") {
+			t.Fatalf("%s: %v", mode, err)
+		}
+		if mode != "install-error" && calls != 0 {
+			t.Fatalf("%s installed", mode)
+		}
+		if strings.Contains(out.String(), "Updated to") {
+			t.Fatal("false success")
+		}
+	}
+}
+
+func TestGetUpdateHintForkMetadataNotLexicographic(t *testing.T) {
+	cachedLatestVersion.mu.Lock()
+	cachedLatestVersion.version = "fork-v1.5.1-beta.1+autoretry.1"
+	cachedLatestVersion.timestamp = time.Now()
+	cachedLatestVersion.mu.Unlock()
+	hint := cachedUpdateHint("v1.5.1-beta.1+notify.1", func(string, bool) (*core.ReleaseInfo, error) { t.Fatal("unexpected check"); return nil, nil })
+	if !strings.Contains(hint, "autoretry.1") {
+		t.Fatal(hint)
 	}
 }
 

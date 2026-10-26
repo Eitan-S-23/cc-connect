@@ -105,7 +105,7 @@ jobs:
           OUT="$APP-${VERSION}-${GOOS}-${GOARCH}${EXT}"
           mkdir -p dist
           go build -trimpath -tags 'goolm' \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X github.com/chenhg5/cc-connect/core.UpdateRepository=${GITHUB_REPOSITORY}" \
             -o "dist/${OUT}" "$CMD"
           echo "已构建 dist/${OUT}"
 
@@ -164,6 +164,6 @@ jobs:
             gh release create "$TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" \
-              --notes "fork 构建：新增 /autoretry 开关卡片，按机器人持久保存。Codex 临时限流后续接原会话，首次立即重试，连续失败后等待 15 秒、60 秒；有效助手输出或工具成功立即清零，连续三次无有效输出则停止。保留心跳报错不 @ 和现有 /notify、/recover 行为。支持取消待执行重试、会话隔离及过期事件防护。" \
+              --notes "fork 构建：统一 cc-connect update、/upgrade 与更新卡片，固定使用本 fork 发布源，支持预发布版本、SHA-256 与架构校验、备份及安装失败回滚。修复 /model 手动指定的模型不出现在候选列表的问题：按机器人、agent 和供应商持久保存，刷新、切换其他模型和重启后仍可选择。保留已有 /autoretry、/notify 与 /recover 功能。首次需安装一次本版本，旧版更新入口仍指向上游；此后可用 /upgrade confirm 更新并自动重启。" \
               --prerelease
           fi

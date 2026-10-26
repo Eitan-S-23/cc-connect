@@ -1,366 +1,246 @@
 package core
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"bytes"
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-const (
-	githubReleasesAPI = "https://api.github.com/repos/chenhg5/cc-connect/releases"
-	giteeReleasesAPI  = "https://gitee.com/api/v5/repos/cg33/cc-connect/releases"
-	githubDownload    = "https://github.com/chenhg5/cc-connect/releases/download"
-	giteeDownload     = "https://gitee.com/cg33/cc-connect/releases/download"
-)
+// UpdateRepository can be overridden by the release workflow with -ldflags -X.
+// Never fall back to another repository: that would remove fork-only features.
+var UpdateRepository = "Eitan-S-23/cc-connect"
 
-type ReleaseInfo struct {
-	TagName    string `json:"tag_name"`
-	Name       string `json:"name"`
-	Body       string `json:"body"`
-	Prerelease bool   `json:"prerelease"`
-	CreatedAt  string `json:"created_at"`
+const officialUpdateRepository = "chenhg5/cc-connect"
+
+type ReleaseAsset struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
-// CheckForUpdate queries GitHub/Gitee for newer releases.
-// If preferGitee is true, tries Gitee first (faster in China); otherwise GitHub first.
-func CheckForUpdate(currentVersion string, preferGitee bool) (*ReleaseInfo, error) {
-	releases, err := fetchReleases(preferGitee)
-	if err != nil {
+type ReleaseInfo struct {
+	TagName     string         `json:"tag_name"`
+	Name        string         `json:"name"`
+	Body        string         `json:"body"`
+	HTMLURL     string         `json:"html_url"`
+	Prerelease  bool           `json:"prerelease"`
+	Draft       bool           `json:"draft"`
+	CreatedAt   string         `json:"created_at"`
+	PublishedAt time.Time      `json:"published_at"`
+	Assets      []ReleaseAsset `json:"assets"`
+}
+
+type releaseUpdater struct {
+	repository   string
+	apiBase      string
+	downloadBase string
+	client       *http.Client
+}
+
+var updateRepositoryPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+$`)
+var updateMu sync.Mutex
+var updateInstalled bool // protected by updateMu; a running process may install only once
+
+type releaseUpdateService interface {
+	Check(string, bool) (*ReleaseInfo, error)
+	Install(string) error
+}
+
+type builtinReleaseUpdateService struct{}
+
+func (builtinReleaseUpdateService) Check(current string, pre bool) (*ReleaseInfo, error) {
+	return CheckForUpdate(current, pre)
+}
+func (builtinReleaseUpdateService) Install(tag string) error { return SelfUpdate(tag) }
+func (e *Engine) releaseUpdates() releaseUpdateService {
+	if e.updateService != nil {
+		return e.updateService
+	}
+	return builtinReleaseUpdateService{}
+}
+
+func newReleaseUpdater() *releaseUpdater {
+	return &releaseUpdater{
+		repository:   UpdateRepository,
+		apiBase:      "https://api.github.com/repos/",
+		downloadBase: "https://github.com/",
+		client:       &http.Client{Timeout: 5 * time.Minute},
+	}
+}
+
+func (u *releaseUpdater) fork() bool {
+	return !strings.EqualFold(u.repository, officialUpdateRepository)
+}
+
+func (u *releaseUpdater) validTag(tag string) bool {
+	if u.fork() && !strings.HasPrefix(tag, "fork-v") {
+		return false
+	}
+	if !u.fork() && strings.HasPrefix(tag, "fork-") {
+		return false
+	}
+	return semverRe.MatchString(strings.TrimPrefix(tag, "fork-"))
+}
+
+// CheckForUpdate is shared by the CLI, chat command and upgrade card.
+// Fork releases include prereleases by default; official builds honor the flag.
+func CheckForUpdate(currentVersion string, includePrereleases bool) (*ReleaseInfo, error) {
+	return newReleaseUpdater().check(currentVersion, includePrereleases)
+}
+
+func (u *releaseUpdater) check(current string, includePre bool) (*ReleaseInfo, error) {
+	if !updateRepositoryPattern.MatchString(u.repository) {
+		return nil, fmt.Errorf("invalid update repository")
+	}
+	var releases []ReleaseInfo
+	if err := u.getJSON("/releases?per_page=100", &releases); err != nil {
 		return nil, err
 	}
-	if len(releases) == 0 {
-		return nil, nil
-	}
-
-	// Find the newest release by semver comparison
 	var best *ReleaseInfo
 	for i := range releases {
 		r := &releases[i]
-		if r.TagName == "" {
+		if r.Draft || !u.validTag(r.TagName) || r.PublishedAt.IsZero() || (!u.fork() && r.Prerelease && !includePre) {
 			continue
 		}
-		if best == nil || semverCompare(r.TagName, best.TagName) > 0 {
+		if best == nil || semverCompare(r.TagName, best.TagName) > 0 ||
+			(u.fork() && semverCompare(r.TagName, best.TagName) == 0 && r.PublishedAt.After(best.PublishedAt)) {
 			best = r
 		}
 	}
-
 	if best == nil {
 		return nil, nil
 	}
-
-	cur := normalizeVersion(currentVersion)
-	latest := normalizeVersion(best.TagName)
-	if cur == latest || semverCompare(best.TagName, currentVersion) <= 0 {
+	if strings.HasPrefix(current, "dev") {
+		return best, nil
+	}
+	if !semverRe.MatchString(strings.TrimPrefix(strings.TrimSpace(current), "fork-")) {
+		return nil, fmt.Errorf("cannot compare current version %q", current)
+	}
+	if normalizeVersion(best.TagName) == normalizeVersion(current) || semverCompare(best.TagName, current) < 0 {
 		return nil, nil
 	}
-
-	return best, nil
-}
-
-func fetchReleases(preferGitee bool) ([]ReleaseInfo, error) {
-	type source struct {
-		name string
-		url  string
+	if semverCompare(best.TagName, current) > 0 {
+		return best, nil
 	}
-	sources := []source{
-		{"github", githubReleasesAPI + "?per_page=20"},
-		{"gitee", giteeReleasesAPI + "?per_page=20&direction=desc&sort=created"},
+	if !u.fork() {
+		return nil, nil
 	}
-	if preferGitee {
-		sources[0], sources[1] = sources[1], sources[0]
-	}
-
-	releases, err := fetchReleasesFrom(sources[0].url)
-	if err == nil && len(releases) > 0 {
-		return releases, nil
-	}
-	slog.Debug("updater: primary source failed, trying fallback", "primary", sources[0].name, "error", err)
-
-	releases, err = fetchReleasesFrom(sources[1].url)
-	if err != nil {
-		return nil, fmt.Errorf("check updates failed (both sources): %w", err)
-	}
-	return releases, nil
-}
-
-func fetchReleasesFrom(apiURL string) ([]ReleaseInfo, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "cc-connect-updater")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
-	}
-
-	var releases []ReleaseInfo
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-		return nil, err
-	}
-	return releases, nil
-}
-
-// SelfUpdate downloads and installs the given release version.
-// If preferGitee is true, tries Gitee download first.
-func SelfUpdate(tag string, preferGitee bool) error {
-	goos := runtime.GOOS
-	goarch := runtime.GOARCH
-
-	ext := ".tar.gz"
-	if goos == "windows" {
-		ext = ".zip"
-	}
-	filename := fmt.Sprintf("cc-connect-%s-%s-%s%s", tag, goos, goarch, ext)
-
-	giteeURL := fmt.Sprintf("%s/%s/%s", giteeDownload, tag, filename)
-	githubURL := fmt.Sprintf("%s/%s/%s", githubDownload, tag, filename)
-	urls := []string{githubURL, giteeURL}
-	if preferGitee {
-		urls = []string{giteeURL, githubURL}
-	}
-
-	var data []byte
-	var lastErr error
-	for _, u := range urls {
-		slog.Info("updater: downloading", "url", u)
-		data, lastErr = downloadFile(u)
-		if lastErr == nil {
+	// Metadata is not semver precedence: +notify and +autoretry must be ordered
+	// by publication time, not lexicographically by feature name.
+	currentTag := "fork-" + normalizeVersion(current)
+	var previous *ReleaseInfo
+	for i := range releases {
+		if releases[i].TagName == currentTag {
+			previous = &releases[i]
 			break
 		}
-		slog.Debug("updater: download failed, trying next", "error", lastErr)
 	}
-	if lastErr != nil && data == nil {
-		return fmt.Errorf("download failed from all sources: %w", lastErr)
+	if previous == nil {
+		var r ReleaseInfo
+		if err := u.getJSON("/releases/tags/"+url.PathEscape(currentTag), &r); err != nil {
+			return nil, fmt.Errorf("cannot establish current fork release: %w", err)
+		}
+		previous = &r
 	}
-
-	var binary []byte
-	var err error
-	if goos == "windows" {
-		binary, err = extractBinaryFromZip(data)
-	} else {
-		binary, err = extractBinaryFromTarGz(data)
+	if previous.TagName != currentTag || previous.Draft || previous.PublishedAt.IsZero() {
+		return nil, fmt.Errorf("current fork release has no publication timestamp")
 	}
-	if err != nil {
-		return fmt.Errorf("extract binary: %w", err)
+	if best.PublishedAt.After(previous.PublishedAt) {
+		return best, nil
 	}
-
-	return replaceBinary(binary)
+	return nil, nil
 }
 
-func downloadFile(url string) ([]byte, error) {
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) > 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
-	}
-	req, err := http.NewRequest("GET", url, nil)
+func (u *releaseUpdater) getJSON(path string, target any) error {
+	data, err := u.download(u.apiBase+u.repository+path, 4<<20, 20*time.Second)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	req.Header.Set("User-Agent", "cc-connect-updater")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("decode release metadata: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
-	}
-
-	return io.ReadAll(resp.Body)
-}
-
-func extractBinaryFromTarGz(data []byte) ([]byte, error) {
-	r := bytes.NewReader(data)
-	gr, err := gzip.NewReader(r)
-	if err != nil {
-		return nil, err
-	}
-	defer gr.Close()
-
-	tr := tar.NewReader(gr)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		name := filepath.Base(hdr.Name)
-		if strings.HasPrefix(name, "cc-connect") && hdr.Typeflag == tar.TypeReg {
-			return io.ReadAll(tr)
-		}
-	}
-	return nil, fmt.Errorf("cc-connect binary not found in archive")
-}
-
-func extractBinaryFromZip(data []byte) ([]byte, error) {
-	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return nil, err
-	}
-	for _, f := range r.File {
-		name := filepath.Base(f.Name)
-		if strings.HasPrefix(name, "cc-connect") && !f.FileInfo().IsDir() {
-			rc, err := f.Open()
-			if err != nil {
-				return nil, err
-			}
-			defer rc.Close()
-			return io.ReadAll(rc)
-		}
-	}
-	return nil, fmt.Errorf("cc-connect binary not found in zip archive")
-}
-
-func replaceBinary(newBinary []byte) error {
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("get executable path: %w", err)
-	}
-	execPath, err = filepath.EvalSymlinks(execPath)
-	if err != nil {
-		return fmt.Errorf("resolve symlinks: %w", err)
-	}
-
-	dir := filepath.Dir(execPath)
-	tmpFile, err := os.CreateTemp(dir, "cc-connect-update-*")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	if _, err := tmpFile.Write(newBinary); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("write new binary: %w", err)
-	}
-	tmpFile.Close()
-
-	if err := os.Chmod(tmpPath, 0o755); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("chmod: %w", err)
-	}
-
-	oldPath := execPath + ".old"
-	os.Remove(oldPath)
-
-	if err := os.Rename(execPath, oldPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("backup old binary: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, execPath); err != nil {
-		// Try to restore
-		if restoreErr := os.Rename(oldPath, execPath); restoreErr != nil {
-			slog.Error("updater: failed to restore old binary after install failed", "error", restoreErr)
-		}
-		return fmt.Errorf("install new binary: %w", err)
-	}
-
-	// Don't remove .old file on Linux - the running process may still need it
-	// for os.Executable() to work correctly after restart.
-	// The .old file will be overwritten on next update.
-
-	slog.Info("updater: binary replaced successfully", "path", execPath)
 	return nil
 }
 
-// --- semver comparison ---
-
-var semverRe = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-(.+))?$`)
-
-type semver struct {
-	major, minor, patch int
-	pre                 string
-	preNum              int
+func (u *releaseUpdater) download(address string, limit int64, timeout time.Duration) ([]byte, error) {
+	client := *u.client
+	client.Timeout = timeout
+	response, err := client.Get(address)
+	if err != nil {
+		return nil, fmt.Errorf("update download: %w", err)
+	}
+	defer closeUpdateReader(response.Body)
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("update download returned HTTP %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read update: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("update download exceeds size limit")
+	}
+	return data, nil
 }
 
-func parseSemver(v string) semver {
-	m := semverRe.FindStringSubmatch(strings.TrimSpace(v))
-	if m == nil {
-		return semver{}
+func releaseAssetNames(tag, goos, goarch string) (string, string) {
+	binary := fmt.Sprintf("cc-connect-%s-%s-%s", strings.TrimPrefix(tag, "fork-"), goos, goarch)
+	if goos == "windows" {
+		return binary + ".zip", binary + ".exe"
 	}
-	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2])
-	patch, _ := strconv.Atoi(m[3])
-	pre := m[4]
-	preNum := 0
-	if idx := strings.LastIndex(pre, "."); idx >= 0 {
-		preNum, _ = strconv.Atoi(pre[idx+1:])
-	}
-	return semver{major: major, minor: minor, patch: patch, pre: pre, preNum: preNum}
+	return binary + ".tar.gz", binary
 }
 
-func normalizeVersion(v string) string {
-	v = strings.TrimSpace(v)
-	if !strings.HasPrefix(v, "v") {
-		v = "v" + v
-	}
-	return v
-}
-
-// semverCompare returns >0 if a > b, <0 if a < b, 0 if equal.
-func semverCompare(a, b string) int {
-	sa := parseSemver(a)
-	sb := parseSemver(b)
-
-	if d := sa.major - sb.major; d != 0 {
-		return d
-	}
-	if d := sa.minor - sb.minor; d != 0 {
-		return d
-	}
-	if d := sa.patch - sb.patch; d != 0 {
-		return d
-	}
-	// No pre-release > has pre-release (1.0.0 > 1.0.0-beta.1)
-	if sa.pre == "" && sb.pre != "" {
-		return 1
-	}
-	if sa.pre != "" && sb.pre == "" {
-		return -1
-	}
-	// Both have pre-release: compare lexicographically, then by number
-	if sa.pre != sb.pre {
-		if d := strings.Compare(sa.pre, sb.pre); d != 0 {
-			// "beta" prefix comparison; if same prefix, compare numbers
-			aPre := strings.TrimRight(sa.pre, "0123456789.")
-			bPre := strings.TrimRight(sb.pre, "0123456789.")
-			if aPre == bPre {
-				return sa.preNum - sb.preNum
-			}
-			return d
+func (r *ReleaseInfo) asset(name string) (ReleaseAsset, error) {
+	var found ReleaseAsset
+	count := 0
+	for _, asset := range r.Assets {
+		if asset.Name == name {
+			found = asset
+			count++
 		}
 	}
-	return 0
+	if count != 1 || found.Size <= 0 {
+		return ReleaseAsset{}, fmt.Errorf("release requires exactly one nonempty %s asset", name)
+	}
+	return found, nil
+}
+
+// SelfUpdate pins the exact tag returned by the check. Verification completes
+// before touching the executable; a newer release cannot change this install.
+func SelfUpdate(tag string) error {
+	if !updateMu.TryLock() {
+		return fmt.Errorf("another update is already running")
+	}
+	defer updateMu.Unlock()
+	if updateInstalled {
+		return fmt.Errorf("update already installed; restart before updating again")
+	}
+	u := newReleaseUpdater()
+	if !updateRepositoryPattern.MatchString(u.repository) || !u.validTag(tag) {
+		return fmt.Errorf("invalid release tag or update repository")
+	}
+	target, err := updateExecutablePath()
+	if err != nil {
+		return err
+	}
+	if u.fork() && isNpmExecutable(target) {
+		return fmt.Errorf("fork updates require a standalone binary; refusing to replace the official npm package")
+	}
+	binary, err := u.verifiedBinary(tag, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	if err := replaceBinaryAt(target, binary, os.Rename); err != nil {
+		return err
+	}
+	updateInstalled = true
+	return nil
 }

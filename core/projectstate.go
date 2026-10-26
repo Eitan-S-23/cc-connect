@@ -10,11 +10,12 @@ import (
 )
 
 type projectStateData struct {
-	AutoRetryEnabled        bool              `json:"auto_retry_enabled,omitempty"`
-	NotifyEnabled           *bool             `json:"notify_enabled,omitempty"`
-	WorkDirOverride         string            `json:"work_dir_override,omitempty"`
-	WorkspaceDirOverrides   map[string]string `json:"workspace_dir_overrides,omitempty"`
-	WorkspaceModelOverrides map[string]string `json:"workspace_model_overrides,omitempty"`
+	RememberedModels        map[string][]string `json:"remembered_models,omitempty"`
+	AutoRetryEnabled        bool                `json:"auto_retry_enabled,omitempty"`
+	NotifyEnabled           *bool               `json:"notify_enabled,omitempty"`
+	WorkDirOverride         string              `json:"work_dir_override,omitempty"`
+	WorkspaceDirOverrides   map[string]string   `json:"workspace_dir_overrides,omitempty"`
+	WorkspaceModelOverrides map[string]string   `json:"workspace_model_overrides,omitempty"`
 }
 
 // ProjectStateStore persists lightweight runtime state for one project.

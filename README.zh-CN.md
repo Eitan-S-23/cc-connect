@@ -440,9 +440,15 @@ npm install -g cc-connect
 brew upgrade cc-connect
 
 # 二进制自更新
-cc-connect update           # 稳定版
-cc-connect update --pre     # 含预发布版本
+cc-connect update           # 本 fork，默认包含预发布版本
+cc-connect update --check   # 仅检查，不安装
+cc-connect update --pre     # 保留兼容参数
 ```
+
+本 fork 从 `Eitan-S-23/cc-connect` 更新，不走上面的官方 npm/Homebrew 渠道。
+聊天中使用 `/upgrade` 检查、`/upgrade confirm` 安装并自动重启。
+首次需安装一次带此更新功能的独立 fork 可执行文件；终端更新后仍需重启守护进程。
+详见[更新行为与失败恢复说明](docs/fork-updates.md)。
 
 
 ## 📊 支持状态
