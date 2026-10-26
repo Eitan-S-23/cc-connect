@@ -62,3 +62,36 @@ func TestNotifyCardCallbackHonorsAllowFrom(t *testing.T) {
 		t.Fatalf("disallowed callback should be ignored: %#v, %v", resp, err)
 	}
 }
+
+func TestAutoRetryCardCallbackActorAndAllowList(t *testing.T) {
+	for _, actor := range []string{"ou_allowed", "ou_guest", ""} {
+		p, err := New(map[string]any{"app_id": "cli_test", "app_secret": "test", "enable_feishu_card": true, "allow_from": "ou_allowed"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ip := p.(*interactivePlatform)
+		calls := 0
+		ip.SetAuthenticatedCardNavigationHandler(func(action, key, user string) *core.Card {
+			calls++
+			if action != "act:/autoretry on" || key != "feishu:chat:owner" || user != "ou_allowed" {
+				t.Fatalf("bad routing %q %q %q", action, key, user)
+			}
+			return core.NewCard().Title("Auto Retry", "green").Markdown("On").Build()
+		})
+		resp, err := ip.onCardAction(&callback.CardActionTriggerEvent{Event: &callback.CardActionTriggerRequest{
+			Operator: &callback.Operator{OpenID: actor},
+			Action:   &callback.CallBackAction{Value: map[string]any{"action": "act:/autoretry on", "session_key": "feishu:chat:owner"}},
+			Context:  &callback.Context{OpenChatID: "chat", OpenMessageID: "original"},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if actor == "ou_allowed" {
+			if calls != 1 || resp == nil || resp.Card == nil {
+				t.Fatal("missing in-place update")
+			}
+		} else if calls != 0 || resp != nil {
+			t.Fatal("unverified actor reached handler")
+		}
+	}
+}

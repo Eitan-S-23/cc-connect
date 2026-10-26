@@ -24,6 +24,7 @@ import (
 // codexSession manages a multi-turn Codex conversation.
 // First Send() uses `codex exec`, subsequent ones use `codex exec resume <threadID>`.
 type codexSession struct {
+	retryProgress
 	workDir        string
 	model          string
 	effort         string
@@ -119,6 +120,8 @@ func newCodexSession(ctx context.Context, cliBin string, cliExtraArgs []string, 
 // If a threadID exists (from a prior turn or resume), uses `codex exec resume <id> <prompt>`.
 // Otherwise uses `codex exec <prompt>` to start a new conversation.
 func (cs *codexSession) Send(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment) error {
+	cs.retrySendMu.Lock()
+	defer cs.retrySendMu.Unlock()
 	if len(files) > 0 {
 		filePaths := core.SaveFilesToDisk(cs.workDir, messageID, files)
 		prompt = core.AppendFileRefs(prompt, filePaths)
@@ -554,6 +557,7 @@ func (cs *codexSession) handleItemCompleted(raw map[string]any) {
 		text := extractItemText(item, "content", "output_text")
 		if text != "" {
 			cs.pendingMsgs = append(cs.pendingMsgs, text)
+			cs.reportRetryProgress(text)
 		}
 
 	case "command_execution":

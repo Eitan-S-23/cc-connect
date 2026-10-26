@@ -707,6 +707,19 @@ const (
 	// messages sent so the user's device rings on platforms that stay silent
 	// for card edits and reactions (e.g. Feishu). See core/attention_notify.go.
 	MsgAttentionTurnComplete      MsgKey = "attention_turn_complete"
+	MsgAutoRetryTitle             MsgKey = "auto_retry_title"
+	MsgAutoRetryOn                MsgKey = "auto_retry_on"
+	MsgAutoRetryOff               MsgKey = "auto_retry_off"
+	MsgAutoRetryRefresh           MsgKey = "auto_retry_refresh"
+	MsgAutoRetryStatus            MsgKey = "auto_retry_status"
+	MsgAutoRetryUsage             MsgKey = "auto_retry_usage"
+	MsgAutoRetryCount             MsgKey = "auto_retry_count"
+	MsgAutoRetryNext              MsgKey = "auto_retry_next"
+	MsgAutoRetryScheduled         MsgKey = "auto_retry_scheduled"
+	MsgAutoRetryExhausted         MsgKey = "auto_retry_exhausted"
+	MsgAutoRetryPrompt            MsgKey = "auto_retry_prompt"
+	MsgAutoRetryNotReady          MsgKey = "auto_retry_not_ready"
+	MsgBuiltinCmdAutoRetry        MsgKey = "autoretry"
 	MsgNotifyTitle                MsgKey = "notify_title"
 	MsgNotifyStatus               MsgKey = "notify_status"
 	MsgNotifyOn                   MsgKey = "notify_on"
@@ -739,6 +752,97 @@ const (
 )
 
 var messages = map[MsgKey]map[Language]string{
+	MsgAutoRetryNotReady: {
+		LangEnglish:            "Automatic retry stopped because the previous turn could not be confirmed ready for continuation. The original session was not replaced.",
+		LangChinese:            "无法确认上一轮已结束并可安全续接，已停止自动重试，未替换原会话。",
+		LangTraditionalChinese: "無法確認上一輪已結束且可安全續接，已停止自動重試，未替換原對話。",
+		LangJapanese:           "前の実行を安全に続行できると確認できないため自動再試行を停止しました。元の会話は変更していません。",
+		LangSpanish:            "Se detuvo el reintento porque no se pudo confirmar que el turno anterior estuviera listo. No se reemplazó la conversación original.",
+	},
+	MsgAutoRetryTitle: {
+		LangEnglish:            "Automatic Rate-Limit Retry",
+		LangChinese:            "限流自动续跑",
+		LangTraditionalChinese: "限流自動續跑",
+		LangJapanese:           "レート制限の自動再試行",
+		LangSpanish:            "Reintento automático por límite de tasa",
+	},
+	MsgAutoRetryOn: {
+		LangEnglish:            "On",
+		LangChinese:            "开启",
+		LangTraditionalChinese: "開啟",
+		LangJapanese:           "オン",
+		LangSpanish:            "Activado",
+	},
+	MsgAutoRetryOff: {
+		LangEnglish:            "Off",
+		LangChinese:            "关闭",
+		LangTraditionalChinese: "關閉",
+		LangJapanese:           "オフ",
+		LangSpanish:            "Desactivado",
+	},
+	MsgAutoRetryRefresh: {
+		LangEnglish:            "Refresh",
+		LangChinese:            "刷新",
+		LangTraditionalChinese: "重新整理",
+		LangJapanese:           "更新",
+		LangSpanish:            "Actualizar",
+	},
+	MsgAutoRetryStatus: {
+		LangEnglish:            "Bot: **%s**\nAutomatic retry: **%s**\n\nAll conversations of this bot; separate counters per conversation. Retry immediately, then after 15s and 60s (server minimums take precedence). Genuine assistant output or a successful tool result resets the counter. Three retries without progress stop the loop. Currently supported: Codex.",
+		LangChinese:            "机器人：**%s**\n自动续跑：**%s**\n\n开关作用于本机器人所有会话，次数各自独立。首次立即重试，连续失败后等待 15 秒、60 秒；优先遵守服务端等待时间。真实助手输出或工具成功立即清零，连续三次重试无进展则停止。目前支持 Codex。",
+		LangTraditionalChinese: "機器人：**%s**\n自動續跑：**%s**\n\n開關套用於此機器人的所有對話，次數各自獨立。立即、15 秒、60 秒重試；優先遵守伺服器等待時間。助手輸出或工具成功立即歸零，連續三次無進展則停止。目前支援 Codex。",
+		LangJapanese:           "ボット: **%s**\n自動再試行: **%s**\n\n会話ごとに計数。即時、15秒、60秒で再試行し、サーバー指定時間を優先します。応答やツール成功でリセット。進展なしで3回失敗したら停止。現在はCodex対応。",
+		LangSpanish:            "Bot: **%s**\nReintento: **%s**\n\nContadores por conversación. Reintentos inmediato, a los 15s y 60s; se respeta el mínimo del servidor. Una respuesta real o herramienta exitosa reinicia el contador. Se detiene tras 3 reintentos sin progreso. Actualmente compatible con Codex.",
+	},
+	MsgAutoRetryUsage: {
+		LangEnglish:            "/autoretry [on|off]. Admin-only changes persist across restarts. Off cancels pending retries, not running work. Restart never replays old retries.",
+		LangChinese:            "/autoretry [on|off]。管理员可切换，重启后保留。关闭取消待执行重试，不打断正在运行的任务。重启不补跑旧重试。",
+		LangTraditionalChinese: "/autoretry [on|off]。管理員可切換，重新啟動後保留。關閉取消待執行重試，不中斷工作；重新啟動不補跑舊重試。",
+		LangJapanese:           "/autoretry [on|off]。変更は管理者のみ。設定は永続化。オフは待機中の再試行だけを取消し、再起動後に再実行しません。",
+		LangSpanish:            "/autoretry [on|off]. Cambios solo para administradores y persistentes. Desactivar cancela reintentos pendientes, no el trabajo en curso. Reiniciar no repite reintentos.",
+	},
+	MsgAutoRetryCount: {
+		LangEnglish:            "This conversation: %d/3 retries since the last progress.",
+		LangChinese:            "当前会话：距上次有效输出已重试 %d/3 次。",
+		LangTraditionalChinese: "目前對話：上次有效輸出後已重試 %d/3 次。",
+		LangJapanese:           "この会話: 最後の進展以降 %d/3 回再試行。",
+		LangSpanish:            "Esta conversación: %d/3 reintentos desde el último progreso.",
+	},
+	MsgAutoRetryNext: {
+		LangEnglish:            "Next retry no earlier than: %s",
+		LangChinese:            "下次重试不早于：%s",
+		LangTraditionalChinese: "下次重試不早於：%s",
+		LangJapanese:           "次の再試行はこの時刻以降: %s",
+		LangSpanish:            "Próximo reintento no antes de: %s",
+	},
+	MsgAutoRetryScheduled: {
+		LangEnglish:            "Rate limit: preparing retry %d/3 in %s, in the same conversation. New input, stop, or /autoretry off cancels the pending retry.",
+		LangChinese:            "临时限流：准备第 %d/3 次原会话续跑，等待 %s。新输入、停止或关闭自动续跑可取消等待。",
+		LangTraditionalChinese: "暫時限流：準備第 %d/3 次原對話續跑，等待 %s。新輸入、停止或關閉可取消等待。",
+		LangJapanese:           "レート制限: 同じ会話で %d/3 回目を %s 後に再試行。新規入力、停止、オフで待機を取消します。",
+		LangSpanish:            "Límite temporal: preparando reintento %d/3 en %s en la misma conversación. Una nueva entrada, parar o desactivar cancela la espera.",
+	},
+	MsgAutoRetryExhausted: {
+		LangEnglish:            "Automatic retry stopped after three consecutive retries without effective output. You can continue manually.",
+		LangChinese:            "连续三次自动重试均无有效输出，已停止本次自动续跑。可以手动继续。",
+		LangTraditionalChinese: "連續三次自動重試均無有效輸出，已停止。可手動繼續。",
+		LangJapanese:           "有効な出力なしで3回再試行したため停止しました。手動で続行できます。",
+		LangSpanish:            "Se detuvo tras tres reintentos consecutivos sin salida efectiva. Puedes continuar manualmente.",
+	},
+	MsgAutoRetryPrompt: {
+		LangEnglish:            "[Automatic continuation] The previous attempt was interrupted by a temporary rate limit. Keep the original task scope and authorization, and continue unfinished work using this conversation's context. Avoid repeating completed operations. If the task is complete or needs a user decision, stop and explain.",
+		LangChinese:            "【自动续跑】上一轮因临时限流中断。请保持原任务范围和授权，基于本会话上下文继续未完成的工作，避免重复已完成的操作。若任务已完成或需要用户决定，请停止并说明。",
+		LangTraditionalChinese: "【自動續跑】上一輪因暫時限流中斷。請保持原任務範圍和授權，基於此對話繼續未完成的工作，避免重複已完成的操作。若已完成或需使用者決定，請停止並說明。",
+		LangJapanese:           "[自動続行] 前回は一時的なレート制限で中断しました。元の範囲と権限を守り、この会話の未完了作業を続けてください。完了済み操作は繰り返さず、完了またはユーザー判断が必要なら停止して説明してください。",
+		LangSpanish:            "[Continuación automática] El intento anterior se interrumpió por un límite temporal. Mantén el alcance y autorización originales y continúa el trabajo pendiente en esta conversación. No repitas operaciones completadas. Si terminó o requiere decisión del usuario, detente y explica.",
+	},
+	MsgBuiltinCmdAutoRetry: {
+		LangEnglish:            "Automatic rate-limit retry (/autoretry [on|off])",
+		LangChinese:            "限流自动续跑开关（/autoretry [on|off]）",
+		LangTraditionalChinese: "限流自動續跑開關（/autoretry [on|off]）",
+		LangJapanese:           "レート制限の自動再試行（/autoretry [on|off]）",
+		LangSpanish:            "Reintento automático por límite de tasa (/autoretry [on|off])",
+	},
 	MsgStarting: {
 		LangEnglish:            "⏳ Processing...",
 		LangChinese:            "⏳ 处理中...",
@@ -1387,6 +1491,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/timer [add|list|del|mute|unmute]\n  Manage one-shot timers\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  Manage heartbeat\n\n" +
 			"/notify [on|off]\n  Manage attention alerts for this bot only\n\n" +
+			"/autoretry [on|off]\n  Automatic rate-limit continuation for this bot\n\n" +
 			"/commands [add|del]\n  Manage custom slash commands\n\n" +
 			"/alias [add|del]\n  Manage command aliases (e.g. 帮助 → /help)\n\n" +
 			"/skills\n  List agent skills (from SKILL.md)\n\n" +
@@ -1433,6 +1538,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/timer [add|list|del|mute|unmute]\n  管理一次性定时器\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  管理心跳\n\n" +
 			"/notify [on|off]\n  当前机器人主动提醒开关\n\n" +
+			"/autoretry [on|off]\n  当前机器人限流自动续跑开关\n\n" +
 			"/commands [add|del]\n  管理自定义命令\n\n" +
 			"/alias [add|del]\n  管理命令别名（如 帮助 → /help）\n\n" +
 			"/skills\n  列出 Agent Skills（来自 SKILL.md）\n\n" +
@@ -1478,6 +1584,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/timer [add|list|del|mute|unmute]\n  管理一次性定時器\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  管理心跳\n\n" +
 			"/notify [on|off]\n  目前機器人主動提醒開關\n\n" +
+			"/autoretry [on|off]\n  目前機器人限流自動續跑開關\n\n" +
 			"/commands [add|del]\n  管理自訂命令\n\n" +
 			"/alias [add|del]\n  管理命令別名（如 幫助 → /help）\n\n" +
 			"/skills\n  列出 Agent Skills（來自 SKILL.md）\n\n" +
@@ -1522,6 +1629,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/timer [add|list|del|mute|unmute]\n  ワンショットタイマー管理\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  ハートビート管理\n\n" +
 			"/notify [on|off]\n  このボットの通知設定\n\n" +
+			"/autoretry [on|off]\n  レート制限の自動再試行\n\n" +
 			"/commands [add|del]\n  カスタムコマンド管理\n\n" +
 			"/alias [add|del]\n  コマンドエイリアス管理（例: ヘルプ → /help）\n\n" +
 			"/skills\n  エージェントスキル一覧（SKILL.md から）\n\n" +
@@ -1566,6 +1674,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/timer [add|list|del|mute|unmute]\n  Gestionar temporizadores de uso único\n\n" +
 			"/heartbeat [status|pause|resume|run|interval]\n  Gestionar heartbeat\n\n" +
 			"/notify [on|off]\n  Gestionar avisos de este bot\n\n" +
+			"/autoretry [on|off]\n  Reintento automático por límite de tasa\n\n" +
 			"/commands [add|del]\n  Gestionar comandos personalizados\n\n" +
 			"/alias [add|del]\n  Gestionar alias de comandos (ej. ayuda → /help)\n\n" +
 			"/skills\n  Listar skills del agente (desde SKILL.md)\n\n" +

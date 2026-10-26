@@ -82,6 +82,8 @@ type itemNotification struct {
 }
 
 type errorNotification struct {
+	ThreadID  string `json:"threadId"`
+	TurnID    string `json:"turnId"`
 	Message   string `json:"message"` // legacy flat error payload
 	WillRetry bool   `json:"willRetry"`
 	Error     *struct {
@@ -145,6 +147,7 @@ type appServerRequestUserInputAnswer struct {
 }
 
 type appServerSession struct {
+	retryProgress
 	url            string
 	workDir        string
 	model          string
@@ -180,10 +183,11 @@ type appServerSession struct {
 	closeOnce sync.Once
 	wg        sync.WaitGroup
 
-	stateMu      sync.Mutex
-	pendingMsgs  []string
-	currentTurn  string
-	preambleSent bool
+	stateMu          sync.Mutex
+	pendingMsgs      []string
+	currentTurn      string
+	lastFinishedTurn string
+	preambleSent     bool
 
 	runtimeMu sync.RWMutex
 	usage     *core.UsageReport
@@ -450,6 +454,8 @@ func (s *appServerSession) storeContextUsage(usage *core.ContextUsage) {
 }
 
 func (s *appServerSession) Send(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment) error {
+	s.retrySendMu.Lock()
+	defer s.retrySendMu.Unlock()
 	if !s.alive.Load() {
 		return fmt.Errorf("session is closed")
 	}
@@ -511,10 +517,7 @@ func (s *appServerSession) Send(prompt string, messageID string, images []core.I
 		return fmt.Errorf("codex app-server turn/start returned empty turn id")
 	}
 
-	s.stateMu.Lock()
-	s.currentTurn = resp.Turn.ID
-	s.pendingMsgs = s.pendingMsgs[:0]
-	s.stateMu.Unlock()
+	s.recordStartedTurn(resp.Turn.ID)
 
 	return nil
 }
@@ -1115,10 +1118,7 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 	case "turn/started":
 		var notif turnNotification
 		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
-			s.stateMu.Lock()
-			s.currentTurn = notif.Turn.ID
-			s.pendingMsgs = s.pendingMsgs[:0]
-			s.stateMu.Unlock()
+			s.recordStartedTurn(notif.Turn.ID)
 			s.storeContextUsage(nil)
 		}
 
@@ -1137,6 +1137,12 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 	case "turn/completed":
 		var notif turnNotification
 		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+			s.stateMu.Lock()
+			stale := notif.Turn.ID != "" && notif.Turn.ID != s.currentTurn
+			s.stateMu.Unlock()
+			if stale {
+				return
+			}
 			if strings.EqualFold(strings.TrimSpace(notif.Turn.Status), "failed") || notif.Turn.Error != nil {
 				errMsg := ""
 				if notif.Turn.Error != nil {
@@ -1180,6 +1186,12 @@ func (s *appServerSession) handleNotification(method string, paramsRaw json.RawM
 	case "error":
 		var notif errorNotification
 		if err := json.Unmarshal(paramsRaw, &notif); err == nil {
+			s.stateMu.Lock()
+			stale := notif.TurnID != "" && notif.TurnID != s.currentTurn
+			s.stateMu.Unlock()
+			if stale || (notif.ThreadID != "" && notif.ThreadID != s.CurrentSessionID()) {
+				return
+			}
 			if notif.WillRetry {
 				// The server is still working. A recoverable API error must
 				// not end the engine's turn or trigger a stopped notification.
@@ -1253,6 +1265,7 @@ func (s *appServerSession) handleItemCompleted(item map[string]any) {
 	case "agentMessage":
 		text, _ := item["text"].(string)
 		if strings.TrimSpace(text) != "" {
+			s.reportRetryProgress(text)
 			s.stateMu.Lock()
 			s.pendingMsgs = append(s.pendingMsgs, text)
 			s.stateMu.Unlock()
@@ -1553,6 +1566,7 @@ func (s *appServerSession) completeTurn() {
 		s.stateMu.Unlock()
 		return
 	}
+	s.lastFinishedTurn = s.currentTurn
 	s.currentTurn = ""
 	s.stateMu.Unlock()
 	s.flushPendingAsText()
@@ -1565,6 +1579,7 @@ func (s *appServerSession) failTurn(err error) {
 		s.stateMu.Unlock()
 		return
 	}
+	s.lastFinishedTurn = s.currentTurn
 	s.currentTurn = ""
 	s.pendingMsgs = s.pendingMsgs[:0]
 	s.stateMu.Unlock()

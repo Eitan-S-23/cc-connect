@@ -10,6 +10,7 @@ import (
 )
 
 type projectStateData struct {
+	AutoRetryEnabled        bool              `json:"auto_retry_enabled,omitempty"`
 	NotifyEnabled           *bool             `json:"notify_enabled,omitempty"`
 	WorkDirOverride         string            `json:"work_dir_override,omitempty"`
 	WorkspaceDirOverrides   map[string]string `json:"workspace_dir_overrides,omitempty"`
@@ -38,6 +39,24 @@ func (ps *ProjectStateStore) NotifyEnabled() (enabled, overridden bool) {
 		return false, false
 	}
 	return *ps.state.NotifyEnabled, true
+}
+
+func (ps *ProjectStateStore) AutoRetryEnabled() bool {
+	ps.mu.RLock()
+	defer ps.mu.RUnlock()
+	return ps.state.AutoRetryEnabled
+}
+
+func (ps *ProjectStateStore) SetAutoRetryEnabled(enabled bool) error {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+	previous := ps.state.AutoRetryEnabled
+	ps.state.AutoRetryEnabled = enabled
+	if err := ps.saveLocked(); err != nil {
+		ps.state.AutoRetryEnabled = previous
+		return err
+	}
+	return nil
 }
 
 // SetNotifyEnabled publishes the override only after it has been saved.

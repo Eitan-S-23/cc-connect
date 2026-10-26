@@ -389,6 +389,8 @@ type AttentionNotifyCfg struct {
 
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
+	autoRetryMu           sync.Mutex
+	autoRetryRuns         map[string]*autoRetryRun
 	name                  string
 	agent                 Agent
 	platforms             []Platform
@@ -1325,7 +1327,7 @@ func isPrivilegedCommandInvocation(cmdID string, args []string) bool {
 	}
 	sub := strings.ToLower(args[0])
 	switch cmdID {
-	case "notify":
+	case "notify", "autoretry":
 		return sub == "on" || sub == "off"
 	case "commands":
 		return matchSubCommand(sub, []string{
@@ -2875,6 +2877,7 @@ func (e *Engine) startMessageRecallMonitor(sessionKey string) context.CancelFunc
 
 func (e *Engine) handleMessage(p Platform, msg *Message) {
 	if msg.Recalled {
+		e.cancelAutoRetry(msg.SessionKey)
 		e.handleMessageRecall(p, msg)
 		return
 	}
@@ -3092,6 +3095,7 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	if e.discardStaleUserMessageIfNeeded(interactiveKey, msg) {
 		return
 	}
+	e.cancelAutoRetry(msg.SessionKey)
 
 	session := sessions.GetOrCreateActive(msg.SessionKey)
 	sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
@@ -5082,7 +5086,7 @@ var agentErrorHandlers = []agentErrorHandler{
 	{"Session not found", MsgSessionNotFound},
 }
 
-func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTypingFn func(), sendDone <-chan error, replyCtx any) {
+func (e *Engine) processInteractiveAttempt(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTypingFn func(), sendDone <-chan error, replyCtx any, retry *autoRetryRun) (retryErr error) {
 	if msgID != "" {
 		state.mu.Lock()
 		state.currentMessageID = msgID
@@ -5221,7 +5225,9 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 						stopTyping()
 						stopTyping = nil
 					}
-					e.notifyDroppedQueuedMessages(state, err)
+					if retry == nil || state.agentSession == nil || !state.agentSession.Alive() {
+						e.notifyDroppedQueuedMessages(state, err)
+					}
 					if state.agentSession == nil || !state.agentSession.Alive() {
 						e.cleanupInteractiveState(sessionKey, state)
 					}
@@ -5229,7 +5235,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 					p := state.platform
 					state.mu.Unlock()
 					e.send(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
-					return
+					return err
 				}
 				continue
 			case <-idleCh:
@@ -5342,6 +5348,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		if event.Type == EventError && errors.Is(event.Error, context.Canceled) {
 			attention.failure = MsgAttentionStopped
 		}
+		retry.observe(event)
 
 		// main codebase has no per-session quiet flag; pr309 referenced
 		// sessionQuiet which we drop. e.display.ThinkingMessages /
@@ -6361,6 +6368,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				state.mu.Unlock()
 
 				// Stop the previous turn's typing indicator
+				e.resetAutoRetryForQueued(retry)
 				if stopTyping != nil {
 					stopTyping()
 					stopTyping = nil
@@ -6551,7 +6559,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 			if state.agentSession == nil || !state.agentSession.Alive() {
 				e.notifyDroppedQueuedMessages(state, event.Error)
 			}
-			return
+			return event.Error
 		}
 	}
 
@@ -6623,6 +6631,7 @@ channelClosed:
 			}
 		}
 	}
+	return
 }
 
 func mergeRichToolResult(steps []ToolStep, event Event, result string, maxLen int) []ToolStep {
@@ -6720,6 +6729,7 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.currentMessageID = queued.messageID
 		state.currentUserID = queued.userID
 		state.currentUserName = queued.userName
+		state.fromHeartbeat = queued.fromHeartbeat
 		state.attentionStopRequested = false
 		state.attentionStopSilent = false
 		state.fromVoice = queued.fromVoice
@@ -6793,6 +6803,7 @@ var builtinCommands = []struct {
 	{[]string{"timer", "at", "remind"}, "timer"},
 	{[]string{"heartbeat", "hb"}, "heartbeat"},
 	{[]string{"notify"}, "notify"},
+	{[]string{"autoretry"}, "autoretry"},
 	{[]string{"compress", "compact"}, "compress"},
 	{[]string{"stop"}, "stop"},
 	{[]string{"cancel"}, "cancel"},
@@ -6971,6 +6982,14 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 			"user_id", msg.UserID, "platform", msg.Platform,
 			"project", e.name, "command", cmdID)
 	}
+	switch cmdID {
+	case "stop", "cancel", "new", "switch", "recover", "dir", "workspace", "delete", "compress", "btw", "shell":
+		e.cancelAutoRetry(msg.SessionKey)
+	case "provider", "model", "mode", "reasoning":
+		if len(args) > 0 {
+			e.cancelAutoRetry(msg.SessionKey)
+		}
+	}
 
 	switch cmdID {
 	case "new":
@@ -7015,6 +7034,9 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdHeartbeat(p, msg, args)
 	case "notify":
 		e.cmdNotify(p, msg, args)
+	case "autoretry":
+		_, inPlace := p.(AuthenticatedCardNavigable)
+		e.replyWithCard(p, msg.ReplyCtx, e.autoRetryCommandCard(args, msg.SessionKey, msg.UserID, inPlace))
 	case "compress":
 		e.cmdCompress(p, msg)
 	case "stop":
@@ -9852,6 +9874,7 @@ func helpCardGroups() []helpCardGroup {
 				{command: "/allow", action: "cmd:/allow"},
 				{command: "/quiet", action: "cmd:/quiet"},
 				{command: "/notify", action: "cmd:/notify"},
+				{command: "/autoretry", action: "cmd:/autoretry"},
 				{command: "/tts", action: "cmd:/tts"},
 			},
 		},
@@ -12470,11 +12493,16 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 		args = strings.TrimSpace(body[i+1:])
 	}
 
+	if cmd == "/autoretry" || cmd == "/notify" {
+		return nil // These cards require the verified callback operator.
+	}
 	if prefix == "act" && cmd == "/model" {
+		e.cancelAutoRetry(sessionKey)
 		return e.handleModelCardAction(args, sessionKey)
 	}
 
 	if prefix == "act" {
+		e.cancelAutoRetry(sessionKey)
 		e.executeCardAction(cmd, args, sessionKey)
 	}
 

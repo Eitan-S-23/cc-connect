@@ -97,6 +97,16 @@ func (e *Engine) handleAuthenticatedCardNav(action, sessionKey, userID string) *
 		return nil
 	}
 	parts := strings.Fields(body)
+	if len(parts) > 0 && parts[0] == "/autoretry" {
+		switch prefix {
+		case "act":
+			return e.autoRetryCommandCard(parts[1:], sessionKey, userID, true)
+		case "nav":
+			return e.autoRetryCommandCard(nil, sessionKey, userID, true)
+		default:
+			return nil
+		}
+	}
 	if len(parts) == 0 || parts[0] != "/notify" {
 		return e.handleCardNav(action, sessionKey)
 	}

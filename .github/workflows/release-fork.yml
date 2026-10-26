@@ -37,8 +37,8 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: 验证核心、配置、飞书与命令入口
-        run: go test -race -tags no_web ./core ./config ./platform/feishu ./cmd/cc-connect
+      - name: 验证核心、Codex、配置、飞书与命令入口
+        run: go test -race -tags no_web ./core ./agent/codex ./config ./platform/feishu ./cmd/cc-connect
 
   build:
     needs: verify
@@ -164,6 +164,6 @@ jobs:
             gh release create "$TAG" dist/* \
               --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" \
-              --notes "fork 构建：新增单机器人 /notify 卡片及 on/off 开关，状态持久保存、即时生效，不影响其他机器人。包含 attention-notify、codex 进程树守卫、会话落盘修复和 app-server stdio 修复。" \
+              --notes "fork 构建：新增 /autoretry 开关卡片，按机器人持久保存。Codex 临时限流后续接原会话，首次立即重试，连续失败后等待 15 秒、60 秒；有效助手输出或工具成功立即清零，连续三次无有效输出则停止。保留心跳报错不 @ 和现有 /notify、/recover 行为。支持取消待执行重试、会话隔离及过期事件防护。" \
               --prerelease
           fi
