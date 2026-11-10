@@ -17,19 +17,78 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   APP: cc-connect
   CMD: ./cmd/cc-connect
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  HOME: ${{ github.workspace }}/.cache/home
+  TMPDIR: ${{ github.workspace }}/.cache/tmp
+  TEMP: ${{ github.workspace }}/.cache/tmp
+  TMP: ${{ github.workspace }}/.cache/tmp
+  GOCACHE: ${{ github.workspace }}/.cache/go-build
+  GOMODCACHE: ${{ github.workspace }}/.cache/go-mod
+  GOPATH: ${{ github.workspace }}/.cache/go-path
+  GOBIN: ${{ github.workspace }}/.cache/go-path/bin
+  GOTMPDIR: ${{ github.workspace }}/.cache/tmp
+  XDG_CACHE_HOME: ${{ github.workspace }}/.cache/xdg-cache
+  XDG_CONFIG_HOME: ${{ github.workspace }}/.cache/xdg-config
+  XDG_DATA_HOME: ${{ github.workspace }}/.cache/xdg-data
+  PNPM_HOME: ${{ github.workspace }}/.cache/pnpm-home
+  NPM_CONFIG_CACHE: ${{ github.workspace }}/.cache/npm
+  GH_CONFIG_DIR: ${{ github.workspace }}/.cache/gh-config
+  RUNNER_TOOL_CACHE: ${{ github.workspace }}/.cache/toolchains
+  RUNNER_TEMP: ${{ github.workspace }}/.cache/tmp
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+  GOENV: 'off'
+  GOTELEMETRY: 'off'
+  GOFLAGS: -mod=readonly
+  GIT_CONFIG_GLOBAL: /dev/null
+  GIT_CONFIG_NOSYSTEM: '1'
+  GH_NO_UPDATE_NOTIFIER: '1'
+  GH_NO_EXTENSION_UPDATE_NOTIFIER: '1'
+  GH_PROMPT_DISABLED: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
 
 jobs:
   verify:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Verify release output boundaries
+        run: |
+          if GOBIN="$GITHUB_WORKSPACE-other/tools" bash .github/release-env.sh; then
+            echo "Preflight accepted an external GOBIN." >&2
+            exit 1
+          fi
+          bash .github/release-env.sh
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          dest: ${{ github.workspace }}/.cache/pnpm-setup
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build web assets
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile --store-dir "$GITHUB_WORKSPACE/.cache/pnpm-store"
+          pnpm build
 
       - name: 安装 Go
         uses: actions/setup-go@v5
@@ -37,12 +96,43 @@ jobs:
           go-version-file: 'go.mod'
           cache: true
 
-      - name: 验证核心、Codex、配置、飞书与命令入口
-        run: go test -race -tags no_web ./core ./agent/codex ./config ./platform/feishu ./cmd/cc-connect
+      - name: Validate release workflow and formatting
+        run: |
+          set -euo pipefail
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
+          "$GOPATH/bin/actionlint"
+          test -z "$(gofmt -l core/dir_list.go core/dir_list_test.go core/cuj_test.go core/engine.go core/i18n.go core/notify.go core/updater_fork_test.go platform/feishu/card.go platform/feishu/card_test.go platform/feishu/dir_list_test.go platform/feishu/feishu.go)"
+
+      - name: Build and vet all packages
+        run: |
+          go build -tags goolm ./...
+          go vet -tags goolm ./...
+
+      - name: Run full repository race tests
+        run: go test -race -tags goolm -count=1 -timeout 10m ./...
+
+      - name: Run critical user journeys and permission regression
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          go test -race -tags goolm -count=1 ./core -run TestCUJ
+          go test -race -tags goolm -count=1 -v ./core -run '^TestDirListCardAction_UnreadableChildPreservesSessionAndRetry$' | tee .cache/permission.log
+          grep -q '^--- PASS: TestDirListCardAction_UnreadableChildPreservesSessionAndRetry' .cache/permission.log
+
+      - name: Upload verified web assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist/
+          if-no-files-found: error
+          retention-days: 7
 
   build:
     needs: verify
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,32 +148,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Verify release output boundaries
+        run: bash .github/release-env.sh
 
       - name: 解析版本与提交
         id: meta
         run: |
           set -euo pipefail
-          REF="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          REF="$RELEASE_TAG"
+          git check-ref-format "refs/tags/$REF"
+          test "$REF" = "$(git describe --tags --exact-match HEAD)"
           echo "version=${REF#fork-}" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: 安装 pnpm
-        uses: pnpm/action-setup@v4
+      - name: Download verified web assets
+        uses: actions/download-artifact@v4
         with:
-          version: 10
-
-      - name: 安装 Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: web/pnpm-lock.yaml
-
-      - name: 构建前端资源（go:embed 依赖 web/dist）
-        working-directory: web
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm build
+          name: web-dist
+          path: web/dist
 
       - name: 安装 Go
         uses: actions/setup-go@v5
@@ -136,34 +221,57 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          persist-credentials: false
+          set-safe-directory: false
+
+      - name: Verify release output boundaries
+        run: bash .github/release-env.sh
+
       - name: 汇总产物
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: cc-connect-*
           merge-multiple: true
 
       - name: 生成合并校验和
         run: |
           set -euo pipefail
           cd dist
+          shopt -s nullglob
+          archives=(*.tar.gz *.zip)
+          test "${#archives[@]}" -eq 6
           # 各矩阵任务各自生成了 checksums.txt，这里按最终文件重算一份
           rm -f checksums.txt
           sha256sum -- *.tar.gz *.zip > checksums.txt
           cat checksums.txt
 
-      - name: 创建或更新 Release
+      - name: Create complete draft and publish Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          TAG="$RELEASE_TAG"
+          test "$TAG" = "$(git describe --tags --exact-match HEAD)"
+          NOTES="docs/releases/${TAG#fork-}.md"
+          test -f "$NOTES"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            gh release create "$TAG" dist/* \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$TAG" \
-              --notes "fork 构建：统一 cc-connect update、/upgrade 与更新卡片，固定使用本 fork 发布源，支持预发布版本、SHA-256 与架构校验、备份及安装失败回滚。修复 /model 手动指定的模型不出现在候选列表的问题：按机器人、agent 和供应商持久保存，刷新、切换其他模型和重启后仍可选择。保留已有 /autoretry、/notify 与 /recover 功能。首次需安装一次本版本，旧版更新入口仍指向上游；此后可用 /upgrade confirm 更新并自动重启。" \
-              --prerelease
+            echo "Release already exists; refusing to overwrite its assets." >&2
+            exit 1
           fi
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file "$NOTES" \
+            --verify-tag --prerelease --draft
+          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 7
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false

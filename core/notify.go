@@ -97,6 +97,9 @@ func (e *Engine) handleAuthenticatedCardNav(action, sessionKey, userID string) *
 		return nil
 	}
 	parts := strings.Fields(body)
+	if len(parts) > 0 && parts[0] == "/dir" && isDirListCardArgs(parts[1:]) {
+		return e.handleDirListCardAction(prefix, parts[1:], sessionKey, userID)
+	}
 	if len(parts) > 0 && parts[0] == "/autoretry" {
 		switch prefix {
 		case "act":

@@ -1,5 +1,41 @@
 # CC-Connect Development Guide
 
+## Mandatory Release-First Deployment Gate
+
+- Every cc-connect program deployment or version update MUST follow this order:
+  committed and tagged source -> required CI checks pass -> GitHub Actions builds
+  and publishes a non-draft GitHub Release -> the target's built-in cc-connect
+  updater installs that release. Do not deploy before this sequence is satisfied.
+- This applies everywhere: the local Windows CLI and daemon, Huawei servers,
+  Tencent containers 1 and 2, and any other machine, container or environment.
+  Calling a deployment temporary, experimental or a test does not exempt it.
+- Release archives and SHA-256 checksums must come from the successful GitHub
+  Actions run for the exact release tag and source commit. A CI artifact without
+  a published Release, a draft Release, or a manually uploaded local build does
+  not satisfy the gate.
+- Keep the authorized release repository/channel. Before installation, verify
+  the expected repository, tag, assets and checksums, and use `/upgrade` or
+  `/update` to confirm that the installed updater recognizes the newer release.
+  An unpublished installed version or ambiguous version ordering is not a reason
+  to bypass the updater.
+- Deploy through the corresponding cc-connect robot's built-in
+  `/upgrade confirm`, with administrator identity and maintenance authorization.
+  Send the command to cc-connect, not a separate shell-command butler. Update
+  once per independent cc-connect process, not once per App sharing that process.
+- Do not deploy locally or remotely compiled binaries, dirty-worktree builds or
+  unpublished test packages. Do not use SSH/SCP, direct file copying, `git pull`
+  followed by a build, npm-package binary replacement, or manual installation of
+  a downloaded Release executable as an alternative deployment path. Local
+  compilation is for isolated development/testing only, never deployment.
+- If CI fails, the Release or required assets are missing, the updater fails or
+  cannot use the authorized channel, or initial installation has no updater,
+  STOP and ask the user for the next step. Do not silently fall back to manual
+  deployment; migration/bootstrap needs a separately agreed approach.
+- Publishing a Release does not itself authorize updating or restarting any
+  instance. Preserve configuration, cron jobs, sessions and other services during
+  an authorized update. A general request to change, build or test cc-connect
+  does not waive this deployment gate.
+
 ## Project Overview
 
 CC-Connect is a bridge that connects AI coding agents (Claude Code, Codex, Gemini CLI, Cursor, etc.) with messaging platforms (Feishu/Lark, Telegram, Discord, Slack, DingTalk, WeChat Work, QQ, LINE). Users interact with their coding agent through their preferred messaging app.
@@ -154,7 +190,12 @@ All user-facing strings must go through `core/i18n.go`:
   fixed code will not be merged. Name regression tests so the bug is
   searchable later, e.g. `TestSwitchToAgentSession_PreservesHistory` for
   the cmdSwitch history-loss bug.
-- Tests must pass before committing: `go test ./...`.
+- Normal development must pass full repository tests before committing:
+  `go test ./...`. For a CI-first release explicitly requested by the user,
+  a dedicated release branch/tag may be committed and pushed for verification.
+  All required GitHub Actions checks must pass before publishing a Release,
+  merging that source into the default branch or deploying it. This is not
+  permission to publish failed CI or substitute a manually built executable.
 - Changes that touch a Critical User Journey (CUJ) — see
   `core/cuj_test.go` — should explicitly run `go test ./core/ -run TestCUJ`
   before opening the PR.

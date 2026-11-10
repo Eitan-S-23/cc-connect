@@ -785,7 +785,10 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 	if event.Event.Operator != nil {
 		userID = event.Event.Operator.OpenID
 	}
-	if strings.HasPrefix(actionVal, "act:/notify") || strings.HasPrefix(actionVal, "nav:/notify") || strings.HasPrefix(actionVal, "act:/autoretry") || strings.HasPrefix(actionVal, "nav:/autoretry") {
+	requiresActor := strings.HasPrefix(actionVal, "act:/notify") || strings.HasPrefix(actionVal, "nav:/notify") ||
+		strings.HasPrefix(actionVal, "act:/autoretry") || strings.HasPrefix(actionVal, "nav:/autoretry") ||
+		strings.HasPrefix(actionVal, "act:/dir ls") || strings.HasPrefix(actionVal, "nav:/dir ls")
+	if requiresActor {
 		if userID == "" || !core.AllowList(p.allowFrom, userID) {
 			return nil, nil
 		}

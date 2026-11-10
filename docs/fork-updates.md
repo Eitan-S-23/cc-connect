@@ -16,6 +16,17 @@ refuses to overwrite the official npm package's executable.
 
 ## Release Contract
 
+All program deployments must follow the release-first gate in AGENTS.md:
+committed/tagged source, passing GitHub Actions verification, a published Release,
+then the target cc-connect robot's administrator-only /upgrade confirm.
+Do not copy locally built or downloaded executables into a running installation.
+Updater failure requires an agreed next step, not a manual deployment fallback.
+
+For the directory-list release, v1.5.1-beta.2+dir-ls.1 has higher semver precedence
+than the unpublished v1.5.1-beta.1+dir-ls.test.2. Merely changing equal-precedence
+build metadata would require the missing current Release's publication time.
+The higher prerelease avoids that lookup without weakening updater validation.
+
 `core.UpdateRepository` defaults to `Eitan-S-23/cc-connect`. The fork release
 workflow embeds `${GITHUB_REPOSITORY}` into it with `-ldflags -X`. Both commands,
 the upgrade card and the nonblocking startup hint use the same updater. There

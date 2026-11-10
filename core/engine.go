@@ -6986,8 +6986,12 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 			"project", e.name, "command", cmdID)
 	}
 	switch cmdID {
-	case "stop", "cancel", "new", "switch", "recover", "dir", "workspace", "delete", "compress", "btw", "shell":
+	case "stop", "cancel", "new", "switch", "recover", "workspace", "delete", "compress", "btw", "shell":
 		e.cancelAutoRetry(msg.SessionKey)
+	case "dir":
+		if len(args) == 0 || !strings.EqualFold(args[0], "ls") {
+			e.cancelAutoRetry(msg.SessionKey)
+		}
 	case "provider", "model", "mode", "reasoning":
 		if len(args) > 0 {
 			e.cancelAutoRetry(msg.SessionKey)
@@ -8818,6 +8822,7 @@ func (e *Engine) dirApply(agent Agent, sessions *SessionManager, interactiveKey,
 		return e.i18n.Tf(MsgDirInvalidPath, newDir), ""
 	}
 
+	e.cancelAutoRetry(sessionKey)
 	if !e.multiWorkspace {
 		switcher.SetWorkDir(newDir)
 	}
@@ -8852,6 +8857,10 @@ func (e *Engine) cmdDir(p Platform, msg *Message, args []string) {
 	switcher, ok := agent.(WorkDirSwitcher)
 	if !ok {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgDirNotSupported))
+		return
+	}
+	if len(args) > 0 && strings.EqualFold(args[0], "ls") {
+		e.cmdDirList(p, msg, switcher, args[1:])
 		return
 	}
 
@@ -12498,6 +12507,9 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 
 	if cmd == "/autoretry" || cmd == "/notify" {
 		return nil // These cards require the verified callback operator.
+	}
+	if cmd == "/dir" && isDirListCardArgs(strings.Fields(args)) {
+		return nil // Directory-list callbacks also require a verified operator.
 	}
 	if prefix == "act" && cmd == "/model" {
 		e.cancelAutoRetry(sessionKey)

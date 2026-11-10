@@ -125,6 +125,35 @@ func TestRenderCardMap_TwoEqualColumnsUseBisectAndCenteredButtons(t *testing.T) 
 	}
 }
 
+func TestRenderCardMap_ThreeEqualColumnsStayInOneRow(t *testing.T) {
+	buttons := []core.CardButton{
+		core.DefaultBtn("Home", "nav:/dir ls encoded 1"),
+		core.DefaultBtn("Prev", "nav:/dir ls encoded 1"),
+		core.DefaultBtn("Next", "nav:/dir ls encoded 3"),
+	}
+	card := core.NewCard().ButtonsEqual(buttons...).Build()
+	got := decodeRenderedCard(t, card)
+	elements := got["elements"].([]any)
+	if len(elements) != 1 {
+		t.Fatalf("elements = %#v, want one navigation row", elements)
+	}
+	row := elements[0].(map[string]any)
+	if row["tag"] != "column_set" || row["flex_mode"] != "none" {
+		t.Fatalf("row = %#v, want a non-wrapping column set", row)
+	}
+	columns := row["columns"].([]any)
+	if len(columns) != 3 {
+		t.Fatalf("columns = %#v, want three", columns)
+	}
+	for i, want := range buttons {
+		column := columns[i].(map[string]any)
+		button := column["elements"].([]any)[0].(map[string]any)
+		if column["weight"] != float64(1) || button["width"] != "fill" || button["text"].(map[string]any)["content"] != want.Text {
+			t.Fatalf("column %d = %#v, want equal width and label %q", i, column, want.Text)
+		}
+	}
+}
+
 func TestRenderCardMap_DefaultActionsStayActionRow(t *testing.T) {
 	buttons := []core.CardButton{
 		core.PrimaryBtn("Yes", "act:/yes"),

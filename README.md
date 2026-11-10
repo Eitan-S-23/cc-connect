@@ -589,11 +589,19 @@ start if any gate fails or if the probe detects a cross-user leak.
 
 ```
 /dir                         Show current work directory and history
+/dir ls [page]               List direct subfolders, with Home / Prev / Next paging
 /dir <path>                  Switch to a path (relative or absolute)
 /dir <number>                Switch from history
 /dir -                       Switch to previous directory
 /cd <path>                   Compatibility alias for /dir <path>
 ```
+
+`/dir ls` lists real subfolders, not directory history. On platforms with verified
+card callbacks, click a folder's **Switch** button to change the working directory.
+**Home**, **Prev**, and **Next** only page the same list; Home means page 1, not
+the help menu or the default directory. Switching keeps the existing `/dir`
+session-reset behavior. Use `/dir ./ls` to select a folder literally named `ls`.
+See [directory-list contracts](docs/dir-ls.md) for behavior and validation details.
 
 
 ### ⏰ Scheduled Tasks

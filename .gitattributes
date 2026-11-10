@@ -1,0 +1,3 @@
+# Keep embedded POSIX probes executable when cross-building from Windows.
+/core/runas_probe.sh text eol=lf
+/.github/release-env.sh text eol=lf

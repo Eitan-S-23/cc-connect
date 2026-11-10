@@ -659,6 +659,17 @@ const (
 	MsgDirCardEmptyHistory MsgKey = "dir_card_empty_history"
 	MsgDirCardReset        MsgKey = "dir_card_reset"
 	MsgDirCardPrev         MsgKey = "dir_card_prev"
+	MsgDirListTitle        MsgKey = "dir_list_title"
+	MsgDirListPath         MsgKey = "dir_list_path"
+	MsgDirListHome         MsgKey = "dir_list_home"
+	MsgDirListPrev         MsgKey = "dir_list_prev"
+	MsgDirListNext         MsgKey = "dir_list_next"
+	MsgDirListSwitch       MsgKey = "dir_list_switch"
+	MsgDirListPageHint     MsgKey = "dir_list_page_hint"
+	MsgDirListEmpty        MsgKey = "dir_list_empty"
+	MsgDirListReadFailed   MsgKey = "dir_list_read_failed"
+	MsgDirListUsage        MsgKey = "dir_list_usage"
+	MsgDirListTextHint     MsgKey = "dir_list_text_hint"
 	MsgShow                MsgKey = "show"
 	MsgShowUsage           MsgKey = "show_usage"
 	MsgShowParseError      MsgKey = "show_parse_error"
@@ -1485,7 +1496,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/tts [always|voice_only]\n  View/switch text-to-speech mode\n\n" +
 			"/shell [--timeout <sec>] <command>\n  Run a shell command and return the output (! prefix shortcut: !cmd)\n\n" +
 			"/show <ref>\n  View a file, directory, or code snippet by reference\n\n" +
-			"/dir [path|reset]\n  Show, switch, or reset agent working directory\n\n" +
+			"/dir [ls [page]|path|reset]\n  Browse folders, show, switch, or reset agent working directory\n\n" +
 			"/stop\n  Stop current execution\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  Manage scheduled tasks\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  Manage one-shot timers\n\n" +
@@ -1532,7 +1543,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/tts [always|voice_only]\n  查看/切换语音合成模式\n\n" +
 			"/shell [--timeout <秒>] <命令>\n  执行 Shell 命令并返回结果（快捷方式：!命令）\n\n" +
 			"/show <引用>\n  按引用查看文件、目录或代码片段\n\n" +
-			"/dir [路径|reset]\n  查看、切换或重置 Agent 工作目录\n\n" +
+			"/dir [ls [页码]|路径|reset]\n  浏览文件夹，查看、切换或重置 Agent 工作目录\n\n" +
 			"/stop\n  停止当前执行\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  管理定时任务\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  管理一次性定时器\n\n" +
@@ -1578,7 +1589,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  壓縮會話上下文\n\n" +
 			"/tts [always|voice_only]\n  查看/切換語音合成模式\n\n" +
 			"/shell [--timeout <秒>] <命令>\n  執行 Shell 命令並返回結果（快捷方式：!命令）\n\n" +
-			"/dir [路徑|reset]\n  查看、切換或重置 Agent 工作目錄\n\n" +
+			"/dir [ls [頁碼]|路徑|reset]\n  瀏覽資料夾，查看、切換或重置 Agent 工作目錄\n\n" +
 			"/stop\n  停止當前執行\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  管理定時任務\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  管理一次性定時器\n\n" +
@@ -1623,7 +1634,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  会話コンテキストを圧縮\n\n" +
 			"/tts [always|voice_only]\n  音声合成モードの表示/切り替え\n\n" +
 			"/shell [--timeout <秒>] <コマンド>\n  シェルコマンドを実行して結果を返す（ショートカット：!コマンド）\n\n" +
-			"/dir [パス|reset]\n  エージェントの作業ディレクトリを表示/切り替え/リセット\n\n" +
+			"/dir [ls [ページ]|パス|reset]\n  フォルダー一覧、作業ディレクトリの表示/切り替え/リセット\n\n" +
 			"/stop\n  現在の実行を停止\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  スケジュールタスク管理\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  ワンショットタイマー管理\n\n" +
@@ -1668,7 +1679,7 @@ var messages = map[MsgKey]map[Language]string{
 			"/compress\n  Comprimir contexto de conversación\n\n" +
 			"/tts [always|voice_only]\n  Ver/cambiar modo de síntesis de voz\n\n" +
 			"/shell [--timeout <seg>] <comando>\n  Ejecutar un comando shell y devolver la salida (atajo: !comando)\n\n" +
-			"/dir [ruta|reset]\n  Ver, cambiar o restablecer el directorio de trabajo del agente\n\n" +
+			"/dir [ls [página]|ruta|reset]\n  Listar carpetas, ver, cambiar o restablecer el directorio de trabajo\n\n" +
 			"/stop\n  Detener ejecución actual\n\n" +
 			"/cron [add|list|exec|del|enable|disable]\n  Gestionar tareas programadas\n\n" +
 			"/timer [add|list|del|mute|unmute]\n  Gestionar temporizadores de uso único\n\n" +
@@ -1790,7 +1801,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangEnglish: "**Tools & Automation**\n" +
 			"/shell <command> — Run a shell command (! shortcut)\n" +
 			"/show <ref> — View file / directory / snippet by reference\n" +
-			"/dir [path|reset] — Show, switch, or reset work directory\n" +
+			"/dir [ls [page]|path|reset] — Browse folders or change work directory\n" +
 			"/cron [add|list|exec|del|...] — Scheduled tasks\n" +
 			"/timer [add|list|del|...] — One-shot timers\n" +
 			"/commands [add|del] — Custom commands\n" +
@@ -1801,7 +1812,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangChinese: "**工具与自动化**\n" +
 			"/shell <命令> — 执行 Shell 命令（!快捷方式）\n" +
 			"/show <引用> — 按引用查看文件、目录或代码片段\n" +
-			"/dir [路径|reset] — 查看、切换或重置工作目录\n" +
+			"/dir [ls [页码]|路径|reset] — 浏览文件夹或切换工作目录\n" +
 			"/cron [add|list|exec|del|...] — 定时任务\n" +
 			"/timer [add|list|del|...] — 一次性定时器\n" +
 			"/commands [add|del] — 自定义命令\n" +
@@ -1812,7 +1823,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "**工具與自動化**\n" +
 			"/shell <命令> — 執行 Shell 命令（!快捷方式）\n" +
 			"/show <引用> — 按引用查看檔案、目錄或程式碼片段\n" +
-			"/dir [路徑|reset] — 查看、切換或重置工作目錄\n" +
+			"/dir [ls [頁碼]|路徑|reset] — 瀏覽資料夾或切換工作目錄\n" +
 			"/cron [add|list|exec|del|...] — 定時任務\n" +
 			"/timer [add|list|del|...] — 一次性定時器\n" +
 			"/commands [add|del] — 自訂命令\n" +
@@ -1823,7 +1834,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese: "**ツール・自動化**\n" +
 			"/shell <コマンド> — シェルコマンド実行（!ショートカット）\n" +
 			"/show <参照> — ファイル/ディレクトリ/スニペットを参照で表示\n" +
-			"/dir [パス|reset] — 作業ディレクトリの表示/切り替え/リセット\n" +
+			"/dir [ls [ページ]|パス|reset] — フォルダー一覧と作業ディレクトリの切り替え\n" +
 			"/cron [add|list|exec|del|...] — スケジュールタスク\n" +
 			"/timer [add|list|del|...] — ワンショットタイマー\n" +
 			"/commands [add|del] — カスタムコマンド\n" +
@@ -1834,7 +1845,7 @@ var messages = map[MsgKey]map[Language]string{
 		LangSpanish: "**Herramientas y automatización**\n" +
 			"/shell <comando> — Ejecutar comando shell (! atajo)\n" +
 			"/show <ref> — Ver archivo/directorio/fragmento por referencia\n" +
-			"/dir [ruta|reset] — Ver, cambiar o restablecer directorio de trabajo\n" +
+			"/dir [ls [página]|ruta|reset] — Listar carpetas o cambiar directorio de trabajo\n" +
 			"/cron [add|list|exec|del|...] — Tareas programadas\n" +
 			"/timer [add|list|del|...] — Temporizadores de uso único\n" +
 			"/commands [add|del] — Comandos personalizados\n" +
@@ -4323,11 +4334,11 @@ var messages = map[MsgKey]map[Language]string{
 		LangSpanish:            "✅ El directorio de trabajo se restauró al valor predeterminado configurado: `%s`",
 	},
 	MsgDirUsage: {
-		LangEnglish:            "Usage: `/dir <path>`\n       `/dir reset`\nExample: `/dir ../project`",
-		LangChinese:            "用法: `/dir <路径>`\n      `/dir reset`\n示例: `/dir ../project`",
-		LangTraditionalChinese: "用法: `/dir <路徑>`\n      `/dir reset`\n範例: `/dir ../project`",
-		LangJapanese:           "使い方: `/dir <パス>`\n       `/dir reset`\n例: `/dir ../project`",
-		LangSpanish:            "Uso: `/dir <ruta>`\n      `/dir reset`\nEjemplo: `/dir ../project`",
+		LangEnglish:            "Usage: `/dir <path>`\n       `/dir reset`\n       `/dir ls [page]`\nExample: `/dir ../project`",
+		LangChinese:            "用法: `/dir <路径>`\n      `/dir reset`\n      `/dir ls [页码]`\n示例: `/dir ../project`",
+		LangTraditionalChinese: "用法: `/dir <路徑>`\n      `/dir reset`\n      `/dir ls [頁碼]`\n範例: `/dir ../project`",
+		LangJapanese:           "使い方: `/dir <パス>`\n       `/dir reset`\n       `/dir ls [ページ]`\n例: `/dir ../project`",
+		LangSpanish:            "Uso: `/dir <ruta>`\n      `/dir reset`\n      `/dir ls [página]`\nEjemplo: `/dir ../project`",
 	},
 	MsgDirNotSupported: {
 		LangEnglish:            "This agent does not support dynamic work directory switching.",
@@ -4412,6 +4423,83 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "上一目錄",
 		LangJapanese:           "前へ",
 		LangSpanish:            "Anterior",
+	},
+	MsgDirListTitle: {
+		LangEnglish:            "Folders",
+		LangChinese:            "文件夹列表",
+		LangTraditionalChinese: "資料夾列表",
+		LangJapanese:           "フォルダー一覧",
+		LangSpanish:            "Carpetas",
+	},
+	MsgDirListPath: {
+		LangEnglish:            "Directory: %s",
+		LangChinese:            "目录：%s",
+		LangTraditionalChinese: "目錄：%s",
+		LangJapanese:           "ディレクトリ: %s",
+		LangSpanish:            "Directorio: %s",
+	},
+	MsgDirListHome: {
+		LangEnglish:            "Home",
+		LangChinese:            "首页",
+		LangTraditionalChinese: "首頁",
+		LangJapanese:           "先頭",
+		LangSpanish:            "Inicio",
+	},
+	MsgDirListPrev: {
+		LangEnglish:            "Prev",
+		LangChinese:            "上一页",
+		LangTraditionalChinese: "上一頁",
+		LangJapanese:           "前へ",
+		LangSpanish:            "Anterior",
+	},
+	MsgDirListNext: {
+		LangEnglish:            "Next",
+		LangChinese:            "下一页",
+		LangTraditionalChinese: "下一頁",
+		LangJapanese:           "次へ",
+		LangSpanish:            "Siguiente",
+	},
+	MsgDirListSwitch: {
+		LangEnglish:            "Switch",
+		LangChinese:            "切换",
+		LangTraditionalChinese: "切換",
+		LangJapanese:           "切替",
+		LangSpanish:            "Cambiar",
+	},
+	MsgDirListPageHint: {
+		LangEnglish:            "Page %d/%d (%d folders)",
+		LangChinese:            "第 %d/%d 页，共 %d 个文件夹",
+		LangTraditionalChinese: "第 %d/%d 頁，共 %d 個資料夾",
+		LangJapanese:           "%d/%d ページ（%d フォルダー）",
+		LangSpanish:            "Página %d/%d (%d carpetas)",
+	},
+	MsgDirListEmpty: {
+		LangEnglish:            "No subfolders in this directory.",
+		LangChinese:            "此目录下没有子文件夹。",
+		LangTraditionalChinese: "此目錄下沒有子資料夾。",
+		LangJapanese:           "このディレクトリにサブフォルダーはありません。",
+		LangSpanish:            "Este directorio no contiene subcarpetas.",
+	},
+	MsgDirListReadFailed: {
+		LangEnglish:            "Could not list folders: %s",
+		LangChinese:            "无法读取文件夹列表：%s",
+		LangTraditionalChinese: "無法讀取資料夾列表：%s",
+		LangJapanese:           "フォルダー一覧を読み取れません: %s",
+		LangSpanish:            "No se pueden listar las carpetas: %s",
+	},
+	MsgDirListUsage: {
+		LangEnglish:            "Usage: `/dir ls [page]`\nUse `/dir ./ls` to switch to a folder named `ls`.",
+		LangChinese:            "用法：`/dir ls [页码]`\n要切换到名为 `ls` 的文件夹，请使用 `/dir ./ls`。",
+		LangTraditionalChinese: "用法：`/dir ls [頁碼]`\n要切換到名為 `ls` 的資料夾，請使用 `/dir ./ls`。",
+		LangJapanese:           "使い方: `/dir ls [ページ]`\n`ls` というフォルダーへは `/dir ./ls` で切り替えます。",
+		LangSpanish:            "Uso: `/dir ls [página]`\nUsa `/dir ./ls` para cambiar a una carpeta llamada `ls`.",
+	},
+	MsgDirListTextHint: {
+		LangEnglish:            "Use `/dir <path>` to switch and `/dir ls <page>` to change pages.",
+		LangChinese:            "使用 `/dir <路径>` 切换目录，使用 `/dir ls <页码>` 翻页。",
+		LangTraditionalChinese: "使用 `/dir <路徑>` 切換目錄，使用 `/dir ls <頁碼>` 翻頁。",
+		LangJapanese:           "`/dir <パス>` で切り替え、`/dir ls <ページ>` でページを移動します。",
+		LangSpanish:            "Usa `/dir <ruta>` para cambiar de directorio y `/dir ls <página>` para cambiar de página.",
 	},
 	MsgShow: {
 		LangEnglish:            "View file / directory / snippet by reference",

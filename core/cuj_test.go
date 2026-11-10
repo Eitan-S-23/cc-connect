@@ -40,6 +40,44 @@ import (
 	"time"
 )
 
+func TestCUJ_D1_DirListBrowseHomeAndSelect(t *testing.T) {
+	dir := dirListFixture(t, 41)
+	e, _, p := dirListTestEngine(t, dir, LangEnglish)
+	sk := "test:owner"
+	send := func(id, content string) {
+		e.ReceiveMessage(p, &Message{SessionKey: sk, UserID: "owner", Platform: "test", MessageID: id, ReplyCtx: "ctx", Content: content})
+	}
+	send("first-page", "/dir ls")
+	card := p.lastReply(t)
+	if len(dirListItems(card)) != 20 || !strings.Contains(card.RenderText(), "Page 1/3 (41 folders)") {
+		t.Fatal("user did not receive the first page of real folders")
+	}
+	send("second-page", "/dir ls 2")
+	card = p.lastReply(t)
+	if !strings.Contains(card.RenderText(), "Page 2/3 (41 folders)") {
+		t.Fatal("text paging did not display page 2")
+	}
+	card = p.cardNav(dirListNavButtons(t, card)[0].Value, sk, "owner")
+	if !strings.Contains(card.RenderText(), "Page 1/3 (41 folders)") {
+		t.Fatal("Home did not return to the same folder list's first page")
+	}
+	card = p.cardNav(dirListNavButtons(t, card)[2].Value, sk, "owner")
+	rows := dirListItems(card)
+	if len(rows) != 20 || !strings.Contains(rows[0].Text, "folder-20") {
+		t.Fatal("Next did not display the next group of folders")
+	}
+	card = p.cardNav(rows[0].BtnValue, sk, "owner")
+	target := filepath.Join(dir, "folder-20")
+	if !strings.Contains(card.RenderText(), target) || !strings.Contains(card.RenderText(), "Page 1/1 (0 folders)") {
+		t.Fatal("clicking the folder did not show the selected directory")
+	}
+	send("history-still-works", "/dir")
+	card = p.lastReply(t)
+	if card.Header.Title != e.i18n.T(MsgDirCardTitle) || !strings.Contains(card.RenderText(), target) || countCardActionValues(card, "act:/dir reset") != 1 {
+		t.Fatal("the original directory-history UI changed")
+	}
+}
+
 func TestCUJ_M1_ManualModelRemainsInListAfterSwitchAndRestart(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "project-state.json")
 	makeEngine := func() (*Engine, *stubPlatformEngine) {

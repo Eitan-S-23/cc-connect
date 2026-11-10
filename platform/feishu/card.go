@@ -168,6 +168,8 @@ func renderCardMap(card *core.Card, sessionKey string) map[string]any {
 					}
 					if len(actions) == 2 {
 						columnSet["flex_mode"] = "bisect"
+					} else if len(actions) == 3 {
+						columnSet["flex_mode"] = "none"
 					}
 					elements = append(elements, columnSet)
 				} else {

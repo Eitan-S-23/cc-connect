@@ -62,6 +62,29 @@ func TestForkUpdateSelectionUsesPublicationOrder(t *testing.T) {
 	}
 }
 
+func TestForkUpdateUnpublishedDirListBuildToHigherPrerelease(t *testing.T) {
+	release := forkTestRelease("fork-v1.5.1-beta.2+dir-ls.1", 25)
+	var calls atomic.Int32
+	u := forkTestUpdater(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/repos/owner/cc-connect/releases" {
+			t.Errorf("unpublished current version should not need a tag lookup: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewEncoder(w).Encode([]ReleaseInfo{release}); err != nil {
+			t.Error(err)
+		}
+	})
+	got, err := u.check("v1.5.1-beta.1+dir-ls.test.2", false)
+	if err != nil || got == nil || got.TagName != release.TagName {
+		t.Fatalf("release=%+v err=%v", got, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("requests=%d, want only the release list", calls.Load())
+	}
+}
+
 func TestForkUpdateCurrentOutsideListAndFailClosed(t *testing.T) {
 	for _, status := range []int{200, 404, 429} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
@@ -377,6 +400,9 @@ func TestForkUpdatePublishedArchiveFixtures(t *testing.T) {
 		t.Skip("set CC_UPDATE_ARCHIVE_DIR for offline published-archive validation")
 	}
 	tag := "fork-v1.5.1-beta.1+autoretry.1"
+	if requested := os.Getenv("CC_UPDATE_ARCHIVE_TAG"); requested != "" {
+		tag = requested
+	}
 	manifest, err := os.ReadFile(filepath.Join(dir, "checksums.txt"))
 	if err != nil {
 		t.Fatal(err)
