@@ -63,7 +63,7 @@ func TestForkUpdateSelectionUsesPublicationOrder(t *testing.T) {
 }
 
 func TestForkUpdateUnpublishedDirListBuildToHigherPrerelease(t *testing.T) {
-	release := forkTestRelease("fork-v1.5.1-beta.2+dir-ls.1", 25)
+	release := forkTestRelease("fork-v1.5.1-beta.2+dir-ls.2", 25)
 	var calls atomic.Int32
 	u := forkTestUpdater(t, func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)

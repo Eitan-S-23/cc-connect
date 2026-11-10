@@ -38,8 +38,8 @@ env:
   PNPM_HOME: ${{ github.workspace }}/.cache/pnpm-home
   NPM_CONFIG_CACHE: ${{ github.workspace }}/.cache/npm
   GH_CONFIG_DIR: ${{ github.workspace }}/.cache/gh-config
-  RUNNER_TOOL_CACHE: ${{ github.workspace }}/.cache/toolchains
-  RUNNER_TEMP: ${{ github.workspace }}/.cache/tmp
+  GH_CACHE_DIR: ${{ github.workspace }}/.cache/gh-cache
+  PROJECT_TOOL_CACHE: ${{ github.workspace }}/.cache/toolchains
   GOTOOLCHAIN: local
   GOWORK: 'off'
   GOENV: 'off'
@@ -73,28 +73,20 @@ jobs:
           fi
           bash .github/release-env.sh
 
+      - name: Install pinned project-local Go and Node.js
+        run: bash .github/setup-release-tools.sh web
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
           dest: ${{ github.workspace }}/.cache/pnpm-setup
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Build web assets
         working-directory: web
         run: |
           pnpm install --frozen-lockfile --store-dir "$GITHUB_WORKSPACE/.cache/pnpm-store"
           pnpm build
-
-      - name: 安装 Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
 
       - name: Validate release workflow and formatting
         run: |
@@ -170,11 +162,8 @@ jobs:
           name: web-dist
           path: web/dist
 
-      - name: 安装 Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
+      - name: Install pinned project-local Go
+        run: bash .github/setup-release-tools.sh go
 
       - name: 交叉编译
         env:

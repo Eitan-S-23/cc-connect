@@ -22,7 +22,7 @@ then the target cc-connect robot's administrator-only /upgrade confirm.
 Do not copy locally built or downloaded executables into a running installation.
 Updater failure requires an agreed next step, not a manual deployment fallback.
 
-For the directory-list release, v1.5.1-beta.2+dir-ls.1 has higher semver precedence
+For the directory-list release, v1.5.1-beta.2+dir-ls.2 has higher semver precedence
 than the unpublished v1.5.1-beta.1+dir-ls.test.2. Merely changing equal-precedence
 build metadata would require the missing current Release's publication time.
 The higher prerelease avoids that lookup without weakening updater validation.

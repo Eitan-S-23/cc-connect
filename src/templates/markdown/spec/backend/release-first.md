@@ -37,6 +37,10 @@ CC_UPDATE_ARCHIVE_TAG=fork-<version>
 - Explicitly override and validate GOBIN as well as GOPATH before go install.
   An inherited GOBIN takes precedence over GOPATH/bin and can otherwise write to
   a system tool directory despite all dependency caches being project-local.
+- RUNNER_* variables are platform-owned and cannot reliably redirect hosted
+  caches. Install checksum-pinned Go/Node archives under PROJECT_TOOL_CACHE,
+  validate archive paths/link targets before extraction, and leave platform
+  tool caches read-only. GH_CACHE_DIR must be explicit before reading run logs.
 - An installed unpublished equal-semver build can lack publication metadata.
   Select a strictly higher semver/prerelease version instead of inventing that
   metadata, lexically sorting suffixes or weakening the updater.
@@ -50,6 +54,7 @@ CC_UPDATE_ARCHIVE_TAG=fork-<version>
 | --- | --- |
 | Controlled output escapes workspace | Fail before creating it |
 | Inherited/sibling-project GOBIN | Reject before any mkdir or go install |
+| Unsafe tool archive path/link or wrong checksum | Reject before extraction |
 | Full suite, CUJ, web or permission check fails | No release build/publication |
 | Tag does not identify checked-out source | Fail before packaging/publication |
 | Fewer/more than six archives | Fail before draft creation |
@@ -62,7 +67,7 @@ CC_UPDATE_ARCHIVE_TAG=fork-<version>
 ## 5. Good / Base / Bad Cases
 
 - Base: a tagged commit produces six archives and one checksum manifest.
-- Good: beta.2+dir-ls.1 is discovered from unpublished beta.1+dir-ls.test.2.
+- Good: beta.2+dir-ls.2 is discovered from unpublished beta.1+dir-ls.test.2.
 - Bad: CI artifacts or a locally compiled binary are uploaded as an allegedly
   reproducible Release and deployed before the Actions gate.
 

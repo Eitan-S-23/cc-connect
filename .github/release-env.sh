@@ -10,7 +10,7 @@ fi
 directories=(
   "$HOME" "$TMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH" "$GOBIN" "$GOTMPDIR"
   "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$PNPM_HOME"
-  "$NPM_CONFIG_CACHE" "$GH_CONFIG_DIR" "$RUNNER_TOOL_CACHE" "$RUNNER_TEMP"
+  "$NPM_CONFIG_CACHE" "$GH_CONFIG_DIR" "$GH_CACHE_DIR" "$PROJECT_TOOL_CACHE"
   "$root/.cache/pnpm-store" "$root/.cache/pnpm-setup" "$root/dist"
   "$root/web/dist" "$root/web/node_modules"
 )
