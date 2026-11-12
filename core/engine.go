@@ -392,6 +392,7 @@ type Engine struct {
 	transientModelCatalog *ProjectStateStore
 	updateService         releaseUpdateService
 	autoRetryMu           sync.Mutex
+	agentPreferencesMu    sync.Mutex
 	autoRetryRuns         map[string]*autoRetryRun
 	name                  string
 	agent                 Agent
@@ -1474,6 +1475,7 @@ func (e *Engine) SetBaseWorkDir(dir string) {
 
 func (e *Engine) SetProjectStateStore(store *ProjectStateStore) {
 	e.projectState = store
+	e.restoreAgentPreferences(e.agent, "")
 }
 
 func (e *Engine) SetDataDir(dir string) {
@@ -4028,6 +4030,13 @@ func (e *Engine) getOrCreateWorkspaceAgent(workspace string) (Agent, *SessionMan
 			}
 		}
 	}
+	if _, ok := opts["reasoning_effort"]; !ok {
+		if switcher, ok := e.agent.(ReasoningEffortSwitcher); ok {
+			if effort := switcher.GetReasoningEffort(); effort != "" {
+				opts["reasoning_effort"] = effort
+			}
+		}
+	}
 	// Copy run_as_user (and run_as_env) for OS-level isolation. Without
 	// this, per-workspace agents silently bypass the project-level
 	// run_as_user config because their opts map is freshly constructed
@@ -4061,6 +4070,8 @@ func (e *Engine) getOrCreateWorkspaceAgent(workspace string) (Agent, *SessionMan
 			}
 		}
 	}
+
+	e.restoreAgentPreferences(agent, workspace)
 
 	// Create per-workspace session manager
 	h := sha256.Sum256([]byte(workspace))
@@ -6992,7 +7003,7 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		if len(args) == 0 || !strings.EqualFold(args[0], "ls") {
 			e.cancelAutoRetry(msg.SessionKey)
 		}
-	case "provider", "model", "mode", "reasoning":
+	case "provider", "model":
 		if len(args) > 0 {
 			e.cancelAutoRetry(msg.SessionKey)
 		}
@@ -10348,7 +10359,7 @@ func (e *Engine) applyModelOnAgent(agent Agent, target string, persistConfig boo
 }
 
 func (e *Engine) cmdReasoning(p Platform, msg *Message, args []string) {
-	agent, sessions, _, err := e.commandContext(p, msg)
+	agent, sessions, interactiveKey, err := e.commandContext(p, msg)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
 		return
@@ -10401,30 +10412,23 @@ func (e *Engine) cmdReasoning(p Platform, msg *Message, args []string) {
 			e.replyWithButtons(p, msg.ReplyCtx, sb.String(), buttons)
 			return
 		}
-		e.replyWithCard(p, msg.ReplyCtx, e.renderReasoningCard())
+		e.replyWithCard(p, msg.ReplyCtx, e.renderReasoningCard(agent))
 		return
 	}
 
-	efforts := switcher.AvailableReasoningEfforts()
-	target := strings.ToLower(strings.TrimSpace(args[0]))
-	if idx, err := strconv.Atoi(target); err == nil && idx >= 1 && idx <= len(efforts) {
-		target = efforts[idx-1]
-	}
-
-	valid := false
-	for _, effort := range efforts {
-		if effort == target {
-			valid = true
-			break
-		}
-	}
+	target, valid := resolveReasoningTarget(switcher, args[0])
 	if !valid {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgReasoningUsage))
 		return
 	}
 
-	switcher.SetReasoningEffort(target)
-	e.cleanupInteractiveState(e.interactiveKeyForSessionKey(msg.SessionKey))
+	target, err = e.setReasoningPreference(agent, interactiveKey, msg.SessionKey, target)
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgAgentPreferencesSaveFailed))
+		return
+	}
+	e.cancelAutoRetry(msg.SessionKey)
+	e.cleanupInteractiveState(interactiveKey)
 
 	s := sessions.GetOrCreateActive(msg.SessionKey)
 	s.SetAgentSessionID("", "")
@@ -10435,7 +10439,7 @@ func (e *Engine) cmdReasoning(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdMode(p Platform, msg *Message, args []string) {
-	agent, _, _, err := e.commandContext(p, msg)
+	agent, _, interactiveKey, err := e.commandContext(p, msg)
 	if err != nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgWsResolutionError, err))
 		return
@@ -10489,17 +10493,20 @@ func (e *Engine) cmdMode(p Platform, msg *Message, args []string) {
 			e.replyWithButtons(p, msg.ReplyCtx, sb.String(), buttons)
 			return
 		}
-		e.replyWithCard(p, msg.ReplyCtx, e.renderModeCard())
+		e.replyWithCard(p, msg.ReplyCtx, e.renderModeCard(agent))
 		return
 	}
 
-	target := strings.ToLower(args[0])
-	switcher.SetMode(target)
-	newMode := switcher.GetMode()
+	newMode, err := e.setModePreference(agent, interactiveKey, msg.SessionKey, args[0])
+	if err != nil {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgAgentPreferencesSaveFailed))
+		return
+	}
+	e.cancelAutoRetry(msg.SessionKey)
 	appliedLive := e.applyLiveModeChange(msg.SessionKey, newMode)
 
 	if !appliedLive {
-		e.cleanupInteractiveState(e.interactiveKeyForSessionKey(msg.SessionKey))
+		e.cleanupInteractiveState(interactiveKey)
 	}
 
 	modes := switcher.PermissionModes()
@@ -12515,6 +12522,9 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 		e.cancelAutoRetry(sessionKey)
 		return e.handleModelCardAction(args, sessionKey)
 	}
+	if prefix == "act" && (cmd == "/mode" || cmd == "/reasoning") {
+		return e.handleAgentPreferenceCardAction(cmd, args, sessionKey)
+	}
 
 	if prefix == "act" {
 		e.cancelAutoRetry(sessionKey)
@@ -12526,10 +12536,8 @@ func (e *Engine) handleCardNav(action string, sessionKey string) *Card {
 		return e.renderHelpGroupCard(args)
 	case "/model":
 		return e.renderModelCard(sessionKey)
-	case "/reasoning":
-		return e.renderReasoningCard()
-	case "/mode":
-		return e.renderModeCard()
+	case "/reasoning", "/mode":
+		return e.handleAgentPreferenceCardAction(cmd, "", sessionKey)
 	case "/lang":
 		return e.renderLangCard()
 	case "/status":
@@ -12714,51 +12722,8 @@ func (e *Engine) executeCardAction(cmd, args, sessionKey string) {
 		state.mu.Unlock()
 		go e.performModelSwitchAsync(sessionKey, state, agent, sessions, target)
 
-	case "/reasoning":
-		if args == "" {
-			return
-		}
-		switcher, ok := e.agent.(ReasoningEffortSwitcher)
-		if !ok {
-			return
-		}
-		efforts := switcher.AvailableReasoningEfforts()
-		target := strings.ToLower(strings.TrimSpace(args))
-		if idx, err := strconv.Atoi(target); err == nil && idx >= 1 && idx <= len(efforts) {
-			target = efforts[idx-1]
-		}
-		for _, effort := range efforts {
-			if effort == target {
-				switcher.SetReasoningEffort(target)
-				e.cleanupInteractiveState(interactiveKey)
-				s := e.sessions.GetOrCreateActive(sessionKey)
-				s.SetAgentSessionID("", "")
-				s.ClearHistory()
-				e.sessions.Save()
-				return
-			}
-		}
-
-	case "/mode":
-		if args == "" {
-			return
-		}
-		switcher, ok := e.agent.(ModeSwitcher)
-		if !ok {
-			return
-		}
-		newMode := strings.ToLower(args)
-		switcher.SetMode(newMode)
-		if e.applyLiveModeChange(sessionKey, switcher.GetMode()) {
-			e.cleanupInteractiveState(interactiveKey)
-			return
-		}
-		e.cleanupInteractiveState(interactiveKey)
-		// Mode change requires a new session to take effect
-		s := e.sessions.GetOrCreateActive(sessionKey)
-		s.SetAgentSessionID("", "")
-		s.ClearHistory()
-		e.sessions.Save()
+	case "/reasoning", "/mode":
+		e.handleAgentPreferenceCardAction(cmd, args, sessionKey)
 
 	case "/lang":
 		if args == "" {
@@ -13536,8 +13501,8 @@ func (e *Engine) renderModelSwitchResultCard(target string, err error) *Card {
 		Build()
 }
 
-func (e *Engine) renderReasoningCard() *Card {
-	switcher, ok := e.agent.(ReasoningEffortSwitcher)
+func (e *Engine) renderReasoningCard(agent Agent) *Card {
+	switcher, ok := agent.(ReasoningEffortSwitcher)
 	if !ok {
 		return e.simpleCard(e.i18n.T(MsgCardTitleReasoning), "orange", e.i18n.T(MsgReasoningNotSupported))
 	}
@@ -13570,8 +13535,8 @@ func (e *Engine) renderReasoningCard() *Card {
 	return cb.Build()
 }
 
-func (e *Engine) renderModeCard() *Card {
-	switcher, ok := e.agent.(ModeSwitcher)
+func (e *Engine) renderModeCard(agent Agent) *Card {
+	switcher, ok := agent.(ModeSwitcher)
 	if !ok {
 		return e.simpleCard(e.i18n.T(MsgCardTitleMode), "violet", e.i18n.T(MsgModeNotSupported))
 	}

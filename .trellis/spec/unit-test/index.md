@@ -5,6 +5,8 @@ generic `pnpm` examples do not define validation for these packages.
 
 Read [directory-list tests](dir-list.md) for changes in `core/` or
 `platform/feishu/` that affect browsing, card callbacks or directory switching.
+Read [agent-preference tests](agent-preferences.md) when changing mode/reasoning
+selection, project-state persistence or workspace-agent construction.
 
 ## Quality Check
 

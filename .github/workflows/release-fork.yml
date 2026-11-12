@@ -93,7 +93,7 @@ jobs:
           set -euo pipefail
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.8
           "$GOPATH/bin/actionlint"
-          test -z "$(gofmt -l core/dir_list.go core/dir_list_test.go core/cuj_test.go core/engine.go core/i18n.go core/notify.go core/updater_fork_test.go platform/feishu/card.go platform/feishu/card_test.go platform/feishu/dir_list_test.go platform/feishu/feishu.go)"
+          test -z "$(gofmt -l core/agent_preferences.go core/agent_preferences_test.go core/projectstate.go core/dir_list.go core/dir_list_test.go core/cuj_test.go core/engine.go core/i18n.go core/notify.go core/updater_fork_test.go platform/feishu/card.go platform/feishu/card_test.go platform/feishu/dir_list_test.go platform/feishu/feishu.go)"
 
       - name: Build and vet all packages
         run: |

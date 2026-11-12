@@ -7,6 +7,8 @@ describe contracts, not permission to build, install, restart or write elsewhere
 
 - [Release-first updates](release-first.md): tagged Actions artifacts, full-suite
   gates, unpublished-version ordering and updater-only deployment.
+- [Agent preferences](agent-preferences.md): durable mode/reasoning selections,
+  workspace isolation, startup restoration and failure rollback.
 
 - [Directory-list callbacks](dir-list-callbacks.md): actor identity, bound paths,
   failure atomicity and the existing directory-switch mutation boundary.

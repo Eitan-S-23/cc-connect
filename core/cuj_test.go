@@ -1653,6 +1653,35 @@ func TestCUJ_C6_ModeSwitchAcknowledged(t *testing.T) {
 	if env.lastSent() == "" {
 		t.Fatal("/mode yolo got no user-visible feedback")
 	}
+
+	t.Run("mode_and_reasoning_survive_restart", func(t *testing.T) {
+		dir := t.TempDir()
+		e, _, p := preferenceTestEngine(t, dir)
+		send := func(id, content string) string {
+			t.Helper()
+			p.clearSent()
+			e.ReceiveMessage(p, &Message{SessionKey: "plain:owner", Platform: "plain", MessageID: id,
+				UserID: "owner", Content: content, ReplyCtx: "ctx"})
+			return strings.Join(p.getSent(), "\n")
+		}
+		if reply := send("select-mode", "/mode yolo"); !strings.Contains(reply, "YOLO") {
+			t.Fatalf("missing mode confirmation: %s", reply)
+		}
+		if reply := send("select-reasoning", "/reasoning high"); !strings.Contains(reply, "`high`") {
+			t.Fatalf("missing reasoning confirmation: %s", reply)
+		}
+		send("new-session", "/new")
+		if reply := send("new-session-reasoning", "/reasoning"); !strings.Contains(reply, e.i18n.Tf(MsgReasoningCurrent, "high")) {
+			t.Fatalf("new session lost reasoning preference: %s", reply)
+		}
+		e, _, p = preferenceTestEngine(t, dir)
+		if reply := send("restarted-mode", "/mode"); !strings.Contains(reply, "**YOLO** (current)") {
+			t.Fatalf("restart lost mode preference: %s", reply)
+		}
+		if reply := send("restarted-reasoning", "/reasoning"); !strings.Contains(reply, e.i18n.Tf(MsgReasoningCurrent, "high")) {
+			t.Fatalf("restart lost reasoning preference: %s", reply)
+		}
+	})
 }
 
 // ===========================================================================

@@ -364,6 +364,8 @@ const (
 	MsgReasoningChanged      MsgKey = "reasoning_changed"
 	MsgReasoningNotSupported MsgKey = "reasoning_not_supported"
 
+	MsgAgentPreferencesSaveFailed MsgKey = "agent_preferences_save_failed"
+
 	MsgCompressNotSupported MsgKey = "compress_not_supported"
 	MsgCompressing          MsgKey = "compressing"
 	MsgCompressNoSession    MsgKey = "compress_no_session"
@@ -2770,6 +2772,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "推理強度已切換為 `%s`，新會話將使用此設定。",
 		LangJapanese:           "推論強度を `%s` に切り替えました。新しいセッションで使用されます。",
 		LangSpanish:            "Esfuerzo de razonamiento cambiado a `%s`. Las nuevas sesiones usarán esta configuración.",
+	},
+	MsgAgentPreferencesSaveFailed: {
+		LangEnglish:            "Could not save the setting. The previous state is unchanged; check the service logs.",
+		LangChinese:            "设置保存失败，原状态未改变，请检查服务日志。",
+		LangTraditionalChinese: "設定儲存失敗，原狀態未改變，請檢查服務日誌。",
+		LangJapanese:           "保存に失敗しました。元の設定は変更されていません。サービスログを確認してください。",
+		LangSpanish:            "No se pudo guardar. El estado anterior no ha cambiado; consulta los registros del servicio.",
 	},
 	MsgReasoningNotSupported: {
 		LangEnglish:            "This agent does not support reasoning effort switching.",
