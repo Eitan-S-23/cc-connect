@@ -17,6 +17,10 @@ go test -race -tags goolm -count=1 ./core -run TestCUJ
 /upgrade confirm: install and request authorized restart
 CC_UPDATE_ARCHIVE_DIR=<project-local-downloads>
 CC_UPDATE_ARCHIVE_TAG=fork-<version>
+whoami
+GIT_SSH_COMMAND=<non-interactive SSH command with pinned hosts and read-only key>
+git push --dry-run --atomic <explicit-authorized-SSH-URL> <branch-refspec> <tag-refspec>
+git push --atomic <same-SSH-URL> <same-branch-refspec> <same-tag-refspec>
 ~~~
 
 ## 3. Contracts
@@ -41,6 +45,26 @@ CC_UPDATE_ARCHIVE_TAG=fork-<version>
   caches. Install checksum-pinned Go/Node archives under PROJECT_TOOL_CACHE,
   validate archive paths/link targets before extraction, and leave platform
   tool caches read-only. GH_CACHE_DIR must be explicit before reading run logs.
+- On Windows, distinguish the process identity (`whoami`) from inherited
+  USERPROFILE/HOME paths. SYSTEM privileges do not automatically provide another
+  user's OAuth/keyring credentials. Missing credentials are not proof that the
+  token expired or that SYSTEM cannot publish. A SYSTEM-only test must not log
+  in to the desktop, impersonate another user or borrow that user's SSH agent.
+- An existing authorized SSH key may work under SYSTEM even when OAuth lookup
+  fails. Match its public key to the expected GitHub account, keep the private
+  key read-only in its approved input location, and pin host keys from GitHub's
+  HTTPS metadata in a project-local known_hosts file. Never print/copy a secret
+  into logs, disable host verification or alter the original credential files.
+- Git for Windows OpenSSH accepts `-F /dev/null`, not the Windows `NUL` spelling.
+  Use BatchMode=yes, IdentitiesOnly=yes, IdentityAgent=none,
+  StrictHostKeyChecking=yes, UpdateHostKeys=no and an explicit project-local
+  UserKnownHostsFile. Disable password/keyboard-interactive authentication and
+  agent forwarding. All selected cache, temporary and evidence paths stay local.
+- Use the explicit SSH URL of the same authorized repository for the dry run
+  and push. Do not rely on `git -c remote.origin.url=...` to replace a multi-valued
+  remote URL: the original HTTPS URL can still be used. Keep long-term remotes
+  unchanged. SSH authentication changes only source transport, not the release
+  channel, required Actions checks or updater-only deployment gate.
 - An installed unpublished equal-semver build can lack publication metadata.
   Select a strictly higher semver/prerelease version instead of inventing that
   metadata, lexically sorting suffixes or weakening the updater.
@@ -55,6 +79,10 @@ CC_UPDATE_ARCHIVE_TAG=fork-<version>
 | Controlled output escapes workspace | Fail before creating it |
 | Inherited/sibling-project GOBIN | Reject before any mkdir or go install |
 | Unsafe tool archive path/link or wrong checksum | Reject before extraction |
+| SYSTEM with inherited USERPROFILE for another user | Diagnose identity and credential scope separately |
+| CredReadW returns ERROR_NOT_FOUND (1168) | No matching credential in this context; do not infer token expiry |
+| GitHub SSH reports the expected account with exit 1 | Authentication succeeded; GitHub does not provide shell access |
+| SSH authentication succeeds but push dry run fails | Do not claim repository write access; inspect the specific failure |
 | Full suite, CUJ, web or permission check fails | No release build/publication |
 | Tag does not identify checked-out source | Fail before packaging/publication |
 | Fewer/more than six archives | Fail before draft creation |
@@ -68,6 +96,8 @@ CC_UPDATE_ARCHIVE_TAG=fork-<version>
 
 - Base: a tagged commit produces six archives and one checksum manifest.
 - Good: beta.2+dir-ls.2 is discovered from unpublished beta.1+dir-ls.test.2.
+- Good: SYSTEM uses an existing authorized SSH key to push to the same repository
+  without a desktop login, while all publication still occurs through Actions.
 - Bad: CI artifacts or a locally compiled binary are uploaded as an allegedly
   reproducible Release and deployed before the Actions gate.
 
@@ -82,6 +112,11 @@ CC_UPDATE_ARCHIVE_TAG=fork-<version>
   six real archive hashes, exact members and executable architectures offline.
 - Full Actions verification and every matrix job must pass; check the final
   non-draft Release's source tag, six asset names/sizes and checksum manifest.
+- For a SYSTEM-only release, record process identity, the expected SSH account
+  greeting, successful push and matching remote tag/commit. Verify original
+  credential/key files remain unchanged and no user impersonation was used.
+- Compare the six hashes in the exact Actions release-job log with published
+  asset digests and downloaded files, then run the offline archive fixture test.
 - Never relabel an older isolated package pass as a new full-repository CI pass.
 
 ## 7. Wrong vs Correct
@@ -92,4 +127,8 @@ Correct: use higher prerelease precedence and retain fail-closed metadata checks
 
 Wrong: failed Actions -> build locally -> SCP the executable into service.
 Correct: stop, report the failed gate, and request the user's next step.
+
+Wrong: missing OAuth token -> conclude SYSTEM cannot publish or must log in as SU.
+Correct: inspect credential scope; test an authorized, pinned, non-interactive
+SSH path to the same repository without changing the requested Windows identity.
 ~~~

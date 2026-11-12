@@ -4,6 +4,8 @@
 - Do embedded executable resources require LF even when Go source accepts CRLF?
 - Are symlink and permission tests actually running on the target platform?
 - Can root capabilities make an unreadable-fixture test skip or falsely pass?
+- Have process identity, inherited profile paths and credential scope been
+  checked separately before declaring a SYSTEM-only release unsupported?
 - Does the audit interpreter have its required parser, or can an existing
   deployment dependency be used without installation or bytecode writes?
 - Have all temporary, home, application-data, telemetry and cache outputs been
@@ -14,3 +16,4 @@
   integration, service health and real platform interaction?
 
 See [isolated regression contracts](../backend/container-regression.md).
+For Windows SYSTEM authentication, see [release-first updates](../backend/release-first.md).
