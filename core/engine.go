@@ -3121,6 +3121,10 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	// startup but still find no state to queue into.
 	e.ensureInteractiveStateForQueueing(interactiveKey, p, msg.ReplyCtx)
 	if !session.TryLock() {
+		if !session.Busy() && e.relayActivity.isReserved() {
+			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelayLiveBusy))
+			return
+		}
 		if e.stopCurrentMessageIfRecalled(interactiveKey) {
 			if e.waitForSessionLock(session, recalledStopLockWait) {
 				goto sessionLocked
@@ -4869,7 +4873,11 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 	// it feeds the attention-notify MinDuration threshold.
 	var turnStartedAt time.Time
 	var attention *attentionTurn
+	var finishBackground func()
 	defer func() {
+		if finishBackground != nil {
+			finishBackground()
+		}
 		if turnActive {
 			if ctx.Err() == nil {
 				attention.finish(false, false)
@@ -4940,6 +4948,7 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 
 			// Mark workspace active on first event.
 			if !turnActive {
+				finishBackground = e.relayActivity.closing()
 				turnActive = true
 				turnStartedAt = time.Now()
 				state.mu.Lock()
@@ -5025,6 +5034,8 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 				textParts = nil
 				toolsUsed = nil
 				turnActive = false
+				finishBackground()
+				finishBackground = nil
 				if workspaceDir != "" && e.workspacePool != nil {
 					if ws := e.workspacePool.Get(workspaceDir); ws != nil {
 						ws.EndTurn()

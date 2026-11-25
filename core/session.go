@@ -60,9 +60,10 @@ type Session struct {
 	// sessions cannot permanently occupy the active slot.
 	ExplicitActivatedAt time.Time `json:"explicit_activated_at,omitempty"`
 
-	mu       sync.Mutex `json:"-"`
-	busy     bool       `json:"-"`
-	activity *relayActivity
+	mu            sync.Mutex `json:"-"`
+	busy          bool       `json:"-"`
+	activity      *relayActivity
+	relayReserved bool
 }
 
 func (s *Session) TryLock() bool {
@@ -76,6 +77,7 @@ func (s *Session) tryLock(reserved bool) bool {
 		return false
 	}
 	s.busy = true
+	s.relayReserved = reserved
 	return true
 }
 
@@ -99,7 +101,8 @@ func (s *Session) unlock(update bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.busy {
-		s.activity.finish()
+		s.activity.finishTurn(s.relayReserved)
+		s.relayReserved = false
 	}
 	s.busy = false
 	if update {

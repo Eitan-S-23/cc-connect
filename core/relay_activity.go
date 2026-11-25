@@ -24,12 +24,28 @@ func (a *relayActivity) start(reserved bool) bool {
 }
 
 func (a *relayActivity) finish() {
+	a.finishTurn(false)
+}
+
+func (a *relayActivity) finishTurn(reserved bool) {
 	if a == nil {
 		return
 	}
 	a.mu.Lock()
 	a.active--
+	if reserved {
+		a.reserved = false
+	}
 	a.mu.Unlock()
+}
+
+func (a *relayActivity) isReserved() bool {
+	if a == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.reserved
 }
 
 func (a *relayActivity) reserve() bool {

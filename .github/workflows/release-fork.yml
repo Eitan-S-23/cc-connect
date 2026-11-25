@@ -1,6 +1,6 @@
 name: Release (fork)
 
-# 只在打 fork-v* 标签时触发，避免与上游 CI 的 main/PR 流程相互干扰。
+# fork-v* 标签发布；relay-live 功能分支只验证和构建，不发布。
 # 产物命名与官方 chenhg5/cc-connect 保持一致：
 #   cc-connect-<version>-<goos>-<goarch>.tar.gz  （非 Windows）
 #   cc-connect-<version>-<goos>-<goarch>.zip     （Windows）

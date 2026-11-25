@@ -451,3 +451,104 @@ func TestRelayActivityAdmissionRace(t *testing.T) {
 		}
 	}
 }
+
+func TestRelayLiveStopAndErrorReleaseBusyState(t *testing.T) {
+	for _, kind := range []string{"stop", "error"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newLiveFixture(t)
+			f.setup()
+			done := f.send()
+			liveAwaitPrompt(t, f.as)
+			if kind == "stop" {
+				f.command(f.b, f.pb, "b-chat", "/stop")
+			} else {
+				f.as.events <- Event{Type: EventError, Error: errors.New("failed task")}
+			}
+			if r := liveAwaitResult(t, done); r.err == nil {
+				t.Fatal("interrupted task reported success")
+			}
+			liveWait(t, func() bool {
+				f.b.relayActivity.mu.Lock()
+				defer f.b.relayActivity.mu.Unlock()
+				return f.b.relayActivity.active == 0 && !f.b.relayActivity.reserved
+			})
+			if !f.b.sessions.GetOrCreateActive("other").TryLock() {
+				t.Fatal("target left permanently busy")
+			}
+			f.b.sessions.GetOrCreateActive("other").Unlock()
+		})
+	}
+}
+
+func TestRelayLiveResultDoesNotIncludeQueuedUserTurn(t *testing.T) {
+	f := newLiveFixture(t)
+	f.setup()
+	done := f.send()
+	liveAwaitPrompt(t, f.as)
+	f.command(f.b, f.pb, "b-chat", "follow-up from B user")
+	f.as.events <- Event{Type: EventResult, Content: "delegated result", Done: true}
+	if r := liveAwaitResult(t, done); r.err != nil || r.text != "delegated result" {
+		t.Fatalf("wrong delegated result: %+v", r)
+	}
+	if prompt := liveAwaitPrompt(t, f.as); !strings.Contains(prompt, "follow-up") {
+		t.Fatal(prompt)
+	}
+	f.as.events <- Event{Type: EventResult, Content: "private follow-up answer", Done: true}
+	liveWait(t, func() bool { return !f.b.sessions.GetOrCreateActive("test:b-chat:admin").Busy() })
+	if f.b.relayActivity.isReserved() {
+		t.Fatal("reservation survived session unlock")
+	}
+}
+
+func TestRelayLiveOtherChatsAreRejectedWithoutOrphanQueues(t *testing.T) {
+	f := newLiveFixture(t)
+	f.setup()
+	done := f.send()
+	liveAwaitPrompt(t, f.as)
+	f.command(f.b, f.pb, "other-chat", "different conversation")
+	if !strings.Contains(strings.Join(f.pb.getSent(), "\n"), "Target is busy") {
+		t.Fatal("other chat was not rejected")
+	}
+	f.as.events <- Event{Type: EventResult, Content: "done", Done: true}
+	liveAwaitResult(t, done)
+	liveWait(t, func() bool { return !f.b.sessions.GetOrCreateActive("test:b-chat:admin").Busy() })
+	select {
+	case prompt := <-f.as.prompts:
+		t.Fatalf("rejected prompt was queued: %q", prompt)
+	default:
+	}
+}
+
+func TestRelayLiveCorruptSettingsNeverFallBackToLegacy(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "relay_live.json"), []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rm := NewRelayManager(dir)
+	if err := rm.SetLiveEnabled(false); err == nil {
+		t.Fatal("overwrote corrupt state")
+	}
+	if _, err := rm.Send(context.Background(), RelayRequest{From: "a", To: "b", SessionKey: "test:chat:user", Message: "task"}); err == nil || !strings.Contains(err.Error(), "refusing fallback") {
+		t.Fatalf("unsafe fallback: %v", err)
+	}
+}
+
+func TestRelayActivityRestoredSessionsAndAtomicRelease(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "sessions.json")
+	sm := NewSessionManager(file)
+	sm.GetOrCreateActive("chat")
+	a := &relayActivity{}
+	restored := NewSessionManager(file, a).GetOrCreateActive("chat")
+	if !restored.TryLock() || a.reserve() {
+		t.Fatal("restored busy session not counted")
+	}
+	restored.Unlock()
+	if !a.reserve() || !restored.tryLock(true) {
+		t.Fatal("delegated lock rejected")
+	}
+	restored.Unlock()
+	if !restored.TryLock() {
+		t.Fatal("reservation not released atomically")
+	}
+	restored.Unlock()
+}

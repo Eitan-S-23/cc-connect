@@ -201,9 +201,9 @@ func (e *Engine) startLiveRelay(from, prompt string, inbox relayInbox) (<-chan r
 	if !e.relayActivity.reserve() {
 		return nil, fmt.Errorf("%s", e.i18n.T(MsgRelayLiveBusy))
 	}
-	started := false
+	reservationOwned := true
 	defer func() {
-		if !started {
+		if reservationOwned {
 			e.relayActivity.release()
 		}
 	}()
@@ -254,6 +254,9 @@ func (e *Engine) startLiveRelay(from, prompt string, inbox relayInbox) (<-chan r
 	if !session.tryLock(true) {
 		return nil, fmt.Errorf("%s", e.i18n.T(MsgRelayLiveBusy))
 	}
+	// The session now owns the reservation. Unlock releases both atomically,
+	// avoiding a gap that could strand a normal message in an orphaned queue.
+	reservationOwned = false
 	// Confirm the target's output is reachable before executing any work.
 	sendCtx, cancel := context.WithTimeout(e.ctx, 15*time.Second)
 	err = p.Send(sendCtx, replyCtx, e.i18n.Tf(MsgRelayLiveReceived, from, truncateRelay(prompt, 1500)))
@@ -266,9 +269,7 @@ func (e *Engine) startLiveRelay(from, prompt string, inbox relayInbox) (<-chan r
 	var once sync.Once
 	msg.onRelayResult = func(text string, err error) { once.Do(func() { done <- relayOutcome{text, err} }) }
 	e.ensureInteractiveStateForQueueing(key, p, replyCtx)
-	started = true
 	go func() {
-		defer e.relayActivity.release()
 		e.processInteractiveMessageWith(p, msg, session, agent, sessions, key, workspace, inbox.SessionKey)
 	}()
 	return done, nil
