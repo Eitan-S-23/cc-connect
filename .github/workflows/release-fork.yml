@@ -257,6 +257,15 @@ jobs:
           sha256sum -- *.tar.gz *.zip > checksums.txt
           cat checksums.txt
 
+      - name: Install pinned project-local Go for archive verification
+        run: bash .github/setup-release-tools.sh go
+
+      - name: Verify updater contracts against all release archives
+        env:
+          CC_UPDATE_ARCHIVE_DIR: ${{ github.workspace }}/dist
+          CC_UPDATE_ARCHIVE_TAG: ${{ env.RELEASE_TAG }}
+        run: go test -tags goolm -count=1 -v ./core -run '^TestForkUpdatePublishedArchiveFixtures$'
+
       - name: Create complete draft and publish Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -277,3 +286,21 @@ jobs:
             --verify-tag --prerelease --draft
           test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 7
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+
+      - name: Verify published Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CC_UPDATE_ARCHIVE_DIR: ${{ github.workspace }}/.cache/published-release
+          CC_UPDATE_ARCHIVE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          case "$(realpath -m "$CC_UPDATE_ARCHIVE_DIR")" in
+            "$GITHUB_WORKSPACE"/*) ;;
+            *) echo "Published-asset output escapes the workspace." >&2; exit 1 ;;
+          esac
+          mkdir -p "$CC_UPDATE_ARCHIVE_DIR"
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = false
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$CC_UPDATE_ARCHIVE_DIR"
+          cmp dist/checksums.txt "$CC_UPDATE_ARCHIVE_DIR/checksums.txt"
+          (cd "$CC_UPDATE_ARCHIVE_DIR" && sha256sum --check checksums.txt)
+          go test -tags goolm -count=1 -v ./core -run '^TestForkUpdatePublishedArchiveFixtures$'
