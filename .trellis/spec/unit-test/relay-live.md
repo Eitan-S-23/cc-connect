@@ -18,6 +18,8 @@ events, and assert actual target output before producing the final EventResult.
 - Authorization: group/unknown private metadata, missing/non-admin actors,
   allowlists and revoked roles fail closed, including card callbacks.
 - Persistence failure: runtime state and links remain unchanged.
+- Delayed inbox delivery: new user turns are rejected without queueing; both
+  successful and failed delivery leave the next normal turn free of stale input.
 - Legacy relay tests continue to pass with default off.
 
 CI runs `go test -race -tags goolm -count=1 -timeout 10m ./...` and explicit CUJs,

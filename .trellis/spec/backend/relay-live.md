@@ -30,6 +30,10 @@ or cancels. Accepted tasks use the target's normal output path and permission
 policy, not legacy auto-approval. A final-turn callback returns only the
 delegated result, before any later queued user turn changes routing.
 
+The project reservation covers target notification delivery, but the session
+lock is acquired only after delivery succeeds. During delivery, new user turns
+receive a busy response rather than entering a queue with no processor.
+
 The relay caller's timeout stops waiting, not execution. B keeps its reservation
 and output path. Mode changes do not cancel or reroute an accepted task.
 External CLI processes are outside the instance's activity accounting.

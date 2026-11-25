@@ -250,6 +250,14 @@ func (e *Engine) startLiveRelay(from, prompt string, inbox relayInbox) (<-chan r
 		}
 		workspace, key = forced, forced+":"+inbox.SessionKey
 	}
+	// Keep only the project reservation until delivery succeeds. A busy session
+	// would let user messages queue before a processor exists to drain them.
+	sendCtx, cancel := context.WithTimeout(e.ctx, 15*time.Second)
+	err = p.Send(sendCtx, replyCtx, e.i18n.Tf(MsgRelayLiveReceived, from, truncateRelay(prompt, 1500)))
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("relay: target delivery failed: %w", err)
+	}
 	session := sessions.GetOrCreateActive(inbox.SessionKey)
 	if !session.tryLock(true) {
 		return nil, fmt.Errorf("%s", e.i18n.T(MsgRelayLiveBusy))
@@ -257,14 +265,6 @@ func (e *Engine) startLiveRelay(from, prompt string, inbox relayInbox) (<-chan r
 	// The session now owns the reservation. Unlock releases both atomically,
 	// avoiding a gap that could strand a normal message in an orphaned queue.
 	reservationOwned = false
-	// Confirm the target's output is reachable before executing any work.
-	sendCtx, cancel := context.WithTimeout(e.ctx, 15*time.Second)
-	err = p.Send(sendCtx, replyCtx, e.i18n.Tf(MsgRelayLiveReceived, from, truncateRelay(prompt, 1500)))
-	cancel()
-	if err != nil {
-		session.UnlockWithoutUpdate()
-		return nil, fmt.Errorf("relay: target delivery failed: %w", err)
-	}
 	done := make(chan relayOutcome, 1)
 	var once sync.Once
 	msg.onRelayResult = func(text string, err error) { once.Do(func() { done <- relayOutcome{text, err} }) }
