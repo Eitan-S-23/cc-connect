@@ -1,0 +1,56 @@
+name: Relay Live Verification
+
+on:
+  push:
+    branches: ['feature/relay-live-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TMPDIR: ${{ github.workspace }}/.cache/tmp
+  TEMP: ${{ github.workspace }}/.cache/tmp
+  TMP: ${{ github.workspace }}/.cache/tmp
+  GOCACHE: ${{ github.workspace }}/.cache/go-build
+  GOMODCACHE: ${{ github.workspace }}/.cache/go-mod
+  GOPATH: ${{ github.workspace }}/.cache/go-path
+  GOBIN: ${{ github.workspace }}/.cache/go-path/bin
+  GOTMPDIR: ${{ github.workspace }}/.cache/tmp
+  PROJECT_TOOL_CACHE: ${{ github.workspace }}/.cache/toolchains
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+  GOENV: 'off'
+  GOTELEMETRY: 'off'
+  GOFLAGS: -mod=readonly
+  GIT_CONFIG_GLOBAL: /dev/null
+  GIT_CONFIG_NOSYSTEM: '1'
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  relay-contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Prepare project-local outputs
+        run: |
+          set -euo pipefail
+          for output in "$TMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH" "$GOBIN" "$GOTMPDIR" "$PROJECT_TOOL_CACHE"; do
+            case "$(realpath -m "$output")" in
+              "$GITHUB_WORKSPACE"/*) ;;
+              *) exit 1 ;;
+            esac
+          done
+          mkdir -p "$TMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH" "$GOBIN" "$PROJECT_TOOL_CACHE"
+      - name: Install pinned Go inside workspace
+        run: bash .github/setup-release-tools.sh go
+      - name: Validate formatting
+        run: test -z "$(gofmt -l core/relay*.go core/session.go core/cuj_test.go core/engine.go core/i18n.go core/auto_retry.go core/webhook.go core/interfaces.go core/message.go core/notify.go config/config.go config/config_test.go platform/feishu/relay_live_test.go platform/feishu/feishu.go cmd/cc-connect/main.go)"
+      - name: Verify delegation, legacy relay and platform callbacks
+        run: go test -race -tags 'goolm,no_web' -count=1 -timeout 3m ./core ./platform/feishu ./config -run 'Test(Relay|CUJ_Relay|PrivateChat|ConfigRelay)'
