@@ -19,8 +19,9 @@ type liveTestContext struct {
 
 type liveTestPlatform struct {
 	stubPlatformEngine
-	keys []string
-	fail bool
+	keys       []string
+	fail       bool
+	beforeSend func(context.Context) error
 }
 
 func (p *liveTestPlatform) IsPrivateChat(ctx any) bool {
@@ -31,6 +32,11 @@ func (p *liveTestPlatform) ReconstructReplyCtx(key string) (any, error) {
 	return liveTestContext{key: key}, nil
 }
 func (p *liveTestPlatform) Send(ctx context.Context, rctx any, text string) error {
+	if p.beforeSend != nil {
+		if err := p.beforeSend(ctx); err != nil {
+			return err
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.fail {
@@ -405,6 +411,65 @@ func TestRelayLiveRoutingAndAuthorizationFailClosed(t *testing.T) {
 			if f.agent.starts.Load() != 0 {
 				t.Fatal("invalid task reached agent")
 			}
+		})
+	}
+}
+
+func TestRelayLivePendingDeliveryRejectsNewMessagesWithoutQueueing(t *testing.T) {
+	for _, kind := range []string{"delivered", "failed"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newLiveFixture(t)
+			f.setup()
+			started, release := make(chan struct{}), make(chan struct{})
+			var startOnce, releaseOnce sync.Once
+			unblock := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(unblock)
+			f.pb.beforeSend = func(ctx context.Context) error {
+				startOnce.Do(func() { close(started) })
+				select {
+				case <-release:
+					if kind == "failed" {
+						return errors.New("delivery unavailable")
+					}
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			done := f.send()
+			select {
+			case <-started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("target notice did not start")
+			}
+			f.command(f.b, f.pb, "b-chat", "message during target delivery")
+			if !strings.Contains(strings.Join(f.pb.getSent(), "\n"), "Target is busy") {
+				t.Fatal("message queued before target delivery completed")
+			}
+			unblock()
+			if kind == "failed" {
+				if result := liveAwaitResult(t, done); result.err == nil {
+					t.Fatal("failed delivery accepted the delegation")
+				}
+				if f.agent.starts.Load() != 0 {
+					t.Fatal("failed delivery started an agent")
+				}
+			} else {
+				if prompt := liveAwaitPrompt(t, f.as); !strings.Contains(prompt, "delegated task") {
+					t.Fatal(prompt)
+				}
+				f.as.events <- Event{Type: EventResult, Content: "delegated result", Done: true}
+				if result := liveAwaitResult(t, done); result.err != nil {
+					t.Fatal(result.err)
+				}
+			}
+			liveWait(t, func() bool { return !f.b.relayActivity.isReserved() })
+			f.command(f.b, f.pb, "b-chat", "next normal message")
+			if prompt := liveAwaitPrompt(t, f.as); strings.Contains(prompt, "message during target delivery") ||
+				!strings.Contains(prompt, "next normal message") {
+				t.Fatalf("rejected message leaked into the next turn: %q", prompt)
+			}
+			f.as.events <- Event{Type: EventResult, Content: "normal result", Done: true}
 		})
 	}
 }
