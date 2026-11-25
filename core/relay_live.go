@@ -279,6 +279,9 @@ func (s *interactiveState) completeRelay(text string, err error) {
 	s.mu.Lock()
 	callback := s.onRelayResult
 	s.onRelayResult = nil
+	if callback != nil && err == nil && s.attentionStopRequested {
+		err = context.Canceled
+	}
 	s.mu.Unlock()
 	if callback != nil {
 		callback(text, err)

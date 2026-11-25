@@ -45,14 +45,18 @@ func (p *liveTestPlatform) Send(ctx context.Context, rctx any, text string) erro
 
 type liveTestAgent struct {
 	stubAgent
-	session *liveTestSession
-	starts  atomic.Int32
-	resume  string
+	session  *liveTestSession
+	override AgentSession
+	starts   atomic.Int32
+	resume   string
 }
 
 func (a *liveTestAgent) StartSession(_ context.Context, id string) (AgentSession, error) {
 	a.resume = id
 	a.starts.Add(1)
+	if a.override != nil {
+		return a.override, nil
+	}
 	return a.session, nil
 }
 
@@ -477,6 +481,34 @@ func TestRelayLiveStopAndErrorReleaseBusyState(t *testing.T) {
 			}
 			f.b.sessions.GetOrCreateActive("other").Unlock()
 		})
+	}
+}
+
+type liveCancelSession struct {
+	*liveTestSession
+}
+
+func (s *liveCancelSession) CancelTurn() error {
+	s.events <- Event{Type: EventResult, Content: "turn cancelled", Done: true}
+	return nil
+}
+
+func TestRelayLiveGracefulStopIsNotReportedAsSuccess(t *testing.T) {
+	f := newLiveFixture(t)
+	f.agent.override = &liveCancelSession{f.as}
+	f.setup()
+	done := f.send()
+	liveAwaitPrompt(t, f.as)
+	f.command(f.b, f.pb, "b-chat", "/stop")
+	result := liveAwaitResult(t, done)
+	if !errors.Is(result.err, context.Canceled) {
+		t.Fatalf("graceful cancellation reported as completion: %+v", result)
+	}
+	liveWait(t, func() bool {
+		return !f.b.sessions.GetOrCreateActive("test:b-chat:admin").Busy()
+	})
+	if f.b.relayActivity.isReserved() {
+		t.Fatal("cancelled turn retained its reservation")
 	}
 }
 
