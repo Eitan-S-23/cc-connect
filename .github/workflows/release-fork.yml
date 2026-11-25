@@ -11,6 +11,7 @@ on:
       - 'feature/relay-live-*'
     tags:
       - 'fork-v*'
+      - 'ci-relay-live-*'
   workflow_dispatch:
     inputs:
       tag:
@@ -219,7 +220,7 @@ jobs:
           retention-days: 7
 
   release:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/fork-v')
+    if: startsWith(github.ref, 'refs/tags/fork-v') || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'fork-v'))
     needs: build
     runs-on: ubuntu-latest
     defaults:
