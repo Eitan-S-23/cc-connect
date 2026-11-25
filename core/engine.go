@@ -510,6 +510,7 @@ type Engine struct {
 	// Interactive agent session management
 	interactiveMu     sync.Mutex
 	interactiveStates map[string]*interactiveState // key = sessionKey
+	relayActivity     *relayActivity
 
 	// Teardown tracking. A session's state is removed from interactiveStates
 	// as soon as /stop is issued, but its OS process can live on for up to
@@ -636,6 +637,7 @@ type interactiveState struct {
 	// messages retain the existing silent-stop behavior.
 	attentionStopRequested bool
 	attentionStopSilent    bool
+	onRelayResult          func(string, error)
 }
 
 // latestUserMessageWatermarkLocked returns the highest UserMessageTimeMs among
@@ -803,12 +805,14 @@ func (pp *pendingPermission) resolve() {
 
 func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath string, lang Language) *Engine {
 	ctx, cancel := context.WithCancel(context.Background())
+	activity := &relayActivity{}
 	e := &Engine{
 		transientModelCatalog: NewProjectStateStore(""),
 		name:                  name,
 		agent:                 ag,
 		platforms:             platforms,
-		sessions:              NewSessionManager(sessionStorePath),
+		sessions:              NewSessionManager(sessionStorePath, activity),
+		relayActivity:         activity,
 		ctx:                   ctx,
 		cancel:                cancel,
 		i18n:                  NewI18n(lang),
@@ -1331,7 +1335,7 @@ func isPrivilegedCommandInvocation(cmdID string, args []string) bool {
 	}
 	sub := strings.ToLower(args[0])
 	switch cmdID {
-	case "notify", "autoretry":
+	case "notify", "autoretry", "relay":
 		return sub == "on" || sub == "off"
 	case "commands":
 		return matchSubCommand(sub, []string{
@@ -1932,6 +1936,10 @@ func timerRunTitle(job *TimerJob) string {
 
 // executeTimerShell runs a shell command for a timer job and sends the output.
 func (e *Engine) executeTimerShell(p Platform, replyCtx any, job *TimerJob) error {
+	if !e.relayActivity.start(false) {
+		return fmt.Errorf("%s", e.i18n.T(MsgRelayLiveBusy))
+	}
+	defer e.relayActivity.finish()
 	workDir := job.WorkDir
 	if workDir == "" {
 		if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
@@ -2110,6 +2118,10 @@ func cronRunTitle(job *CronJob) string {
 
 // executeCronShell runs a shell command for a cron job and sends the output.
 func (e *Engine) executeCronShell(p Platform, replyCtx any, job *CronJob) error {
+	if !e.relayActivity.start(false) {
+		return fmt.Errorf("%s", e.i18n.T(MsgRelayLiveBusy))
+	}
+	defer e.relayActivity.finish()
 	workDir := job.WorkDir
 	if workDir == "" {
 		if wd, ok := e.agent.(interface{ GetWorkDir() string }); ok {
@@ -3805,6 +3817,9 @@ func (e *Engine) processInteractiveMessage(p Platform, msg *Message, session *Se
 // and workspaceDir so that multi-workspace mode can route to per-workspace agents.
 // ccSessionKey, when non-empty, is used for CC_SESSION_KEY in the agent env; otherwise interactiveKey is used.
 func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session *Session, agent Agent, sessions *SessionManager, interactiveKey string, workspaceDir string, ccSessionKey string) {
+	if msg.onRelayResult != nil {
+		defer msg.onRelayResult("", fmt.Errorf("%s", e.i18n.T(MsgRelayLiveInterrupted)))
+	}
 	// session.Unlock() is NOT deferred here — it is called explicitly in
 	// the drain loop below while holding state.mu to close the race window
 	// between "queue is empty" and "session unlocked". A deferred fallback
@@ -3861,6 +3876,7 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 	state.attentionStopRequested = false
 	state.attentionStopSilent = false
 	state.currentTurnUserMessageTimeMs = msg.UserMessageTimeMs
+	state.onRelayResult = msg.onRelayResult
 	state.mu.Unlock()
 	stopRecallMonitor := e.startMessageRecallMonitor(interactiveKey)
 	defer stopRecallMonitor()
@@ -4077,7 +4093,7 @@ func (e *Engine) getOrCreateWorkspaceAgent(workspace string) (Agent, *SessionMan
 	h := sha256.Sum256([]byte(workspace))
 	sessionFile := filepath.Join(filepath.Dir(e.sessions.StorePath()),
 		fmt.Sprintf("%s_ws_%s.json", e.name, hex.EncodeToString(h[:4])))
-	sessions := NewSessionManager(sessionFile)
+	sessions := NewSessionManager(sessionFile, e.relayActivity)
 
 	ws.agent = agent
 	ws.sessions = sessions
@@ -4547,6 +4563,7 @@ func (e *Engine) beginSessionClose(sessionKey string) func() {
 	if sessionKey == "" {
 		return func() {}
 	}
+	finishActivity := e.relayActivity.closing()
 	done := make(chan struct{})
 	e.closingMu.Lock()
 	if e.closingSessions == nil {
@@ -4556,6 +4573,7 @@ func (e *Engine) beginSessionClose(sessionKey string) func() {
 	e.closingMu.Unlock()
 
 	return func() {
+		defer finishActivity()
 		e.closingMu.Lock()
 		// Only clear the registry if it still points at *this* teardown; an
 		// overlapping close may have replaced it and is still running.
@@ -6308,6 +6326,7 @@ func (e *Engine) processInteractiveAttempt(state *interactiveState, session *Ses
 			// Finish before a queued sender replaces the turn's routing, and
 			// before auto-compress can return through a separate event loop.
 			attention.finish(true, isSilent)
+			state.completeRelay(baseResponse, nil)
 
 			// TTS: async voice reply if enabled (skipped for silent replies)
 			if !isSilent && e.tts != nil && e.tts.Enabled && e.tts.TTS != nil {
@@ -6818,6 +6837,7 @@ var builtinCommands = []struct {
 	{[]string{"heartbeat", "hb"}, "heartbeat"},
 	{[]string{"notify"}, "notify"},
 	{[]string{"autoretry"}, "autoretry"},
+	{[]string{"relay"}, "relay"},
 	{[]string{"compress", "compact"}, "compress"},
 	{[]string{"stop"}, "stop"},
 	{[]string{"cancel"}, "cancel"},
@@ -7085,6 +7105,8 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 		e.cmdDelete(p, msg, args)
 	case "bind":
 		e.cmdBind(p, msg, args)
+	case "relay":
+		e.cmdRelay(p, msg, args)
 	case "search":
 		e.cmdSearch(p, msg, args)
 	case "shell":
@@ -8622,7 +8644,14 @@ func (e *Engine) cmdShell(p Platform, msg *Message, raw string) {
 		workDir, _ = os.Getwd()
 	}
 
-	go func() { _ = e.runShellWithProgress(p, msg.ReplyCtx, shellCmd, workDir, timeout, 4000) }()
+	if !e.relayActivity.start(false) {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelayLiveBusy))
+		return
+	}
+	go func() {
+		defer e.relayActivity.finish()
+		_ = e.runShellWithProgress(p, msg.ReplyCtx, shellCmd, workDir, timeout, 4000)
+	}()
 }
 
 func (e *Engine) cmdDiff(p Platform, msg *Message, raw string) {
@@ -15112,6 +15141,11 @@ func (e *Engine) executeCustomCommand(p Platform, msg *Message, cmd *CustomComma
 
 // executeShellCommand runs a shell command and sends the output to the user.
 func (e *Engine) executeShellCommand(p Platform, msg *Message, cmd *CustomCommand, args []string) {
+	if !e.relayActivity.start(false) {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelayLiveBusy))
+		return
+	}
+	defer e.relayActivity.finish()
 	slog.Info("executing shell command",
 		"command", cmd.Name,
 		"exec", cmd.Exec,
@@ -16288,6 +16322,11 @@ func (e *Engine) relayContextForSourceSessionKey(fromProject, sourceSessionKey s
 // dedicated relay session, sends the message to the agent, and blocks until
 // the complete response is collected (or the relay context times out).
 func (e *Engine) HandleRelay(ctx context.Context, fromProject, sourceSessionKey, message string) (string, error) {
+	if !e.relayActivity.start(false) {
+		return "", fmt.Errorf("%s", e.i18n.T(MsgRelayLiveBusy))
+	}
+	finishActivity := e.relayActivity.finish
+	defer func() { finishActivity() }()
 	agent, sessions, relaySessionKey, err := e.relayContextForSourceSessionKey(fromProject, sourceSessionKey)
 	if err != nil {
 		return "", err
@@ -16409,7 +16448,12 @@ func (e *Engine) HandleRelay(ctx context.Context, fromProject, sourceSessionKey,
 			// Relay timed out. Let the agent finish its turn in the
 			// background so the session state is saved cleanly and the
 			// session remains resumable for the next relay call.
-			go e.drainRelaySession(agentSession, session, sessions, agent.Name(), relaySessionKey)
+			finish := finishActivity
+			finishActivity = func() {}
+			go func() {
+				defer finish()
+				e.drainRelaySession(agentSession, session, sessions, agent.Name(), relaySessionKey)
+			}()
 			return relayPartialResponseOrError(ctx.Err(), textParts, fromProject, e.name)
 		}
 	}
@@ -16503,6 +16547,9 @@ func (e *Engine) drainRelaySession(agentSession AgentSession, session *Session, 
 // The <project> argument is the project name from config.toml [[projects]].
 // Multiple projects can be bound together for relay.
 func (e *Engine) cmdBind(p Platform, msg *Message, args []string) {
+	if e.handleLiveBind(p, msg, args) {
+		return
+	}
 	if e.relayManager == nil {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRelayNotAvailable))
 		return

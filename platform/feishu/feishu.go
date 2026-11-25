@@ -111,6 +111,7 @@ type replyContext struct {
 	chatID          string
 	sessionKey      string
 	bootstrapThread bool
+	privateChat     bool
 }
 
 type Platform struct {
@@ -786,6 +787,7 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 		userID = event.Event.Operator.OpenID
 	}
 	requiresActor := strings.HasPrefix(actionVal, "act:/notify") || strings.HasPrefix(actionVal, "nav:/notify") ||
+		strings.HasPrefix(actionVal, "act:/relay") || strings.HasPrefix(actionVal, "nav:/relay") ||
 		strings.HasPrefix(actionVal, "act:/autoretry") || strings.HasPrefix(actionVal, "nav:/autoretry") ||
 		strings.HasPrefix(actionVal, "act:/dir ls") || strings.HasPrefix(actionVal, "nav:/dir ls")
 	if requiresActor {
@@ -1598,7 +1600,7 @@ func (p *Platform) onMessage(ctx context.Context, event *larkim.P2MessageReceive
 	mentions := msg.Mentions
 	parentID := stringValue(msg.ParentId)
 
-	rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey}
+	rctx := replyContext{messageID: messageID, chatID: chatID, sessionKey: sessionKey, privateChat: chatType == "p2p"}
 	slog.Debug(p.tag()+": routed inbound message",
 		"message_id", messageID,
 		"session_key", sessionKey,
@@ -4204,6 +4206,11 @@ func stringValue(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+func (p *Platform) IsPrivateChat(replyCtx any) bool {
+	rc, ok := replyCtx.(replyContext)
+	return ok && rc.privateChat
 }
 
 func (p *Platform) ReconstructReplyCtx(sessionKey string) (any, error) {

@@ -10,6 +10,22 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+func TestConfigRelayLiveDefaultAndOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		var cfg Config
+		text := ""
+		if enabled {
+			text = "[relay]\nlive = true\n"
+		}
+		if _, err := toml.Decode(text, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Relay.Live != enabled {
+			t.Fatalf("live=%v want=%v", cfg.Relay.Live, enabled)
+		}
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string

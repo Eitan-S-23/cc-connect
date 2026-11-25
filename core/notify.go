@@ -97,6 +97,16 @@ func (e *Engine) handleAuthenticatedCardNav(action, sessionKey, userID string) *
 		return nil
 	}
 	parts := strings.Fields(body)
+	if len(parts) > 0 && parts[0] == "/relay" {
+		switch prefix {
+		case "act":
+			return e.relayCommandCard(parts[1:], userID, true)
+		case "nav":
+			return e.relayCommandCard(nil, userID, true)
+		default:
+			return nil
+		}
+	}
 	if len(parts) > 0 && parts[0] == "/dir" && isDirListCardArgs(parts[1:]) {
 		return e.handleDirListCardAction(prefix, parts[1:], sessionKey, userID)
 	}

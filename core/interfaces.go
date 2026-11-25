@@ -54,6 +54,12 @@ type ReplyContextReconstructor interface {
 	ReconstructReplyCtx(sessionKey string) (any, error)
 }
 
+// PrivateChatDetector verifies a direct conversation using trusted inbound
+// platform metadata. Unknown chat types must return false.
+type PrivateChatDetector interface {
+	IsPrivateChat(replyCtx any) bool
+}
+
 // RelayGroupVisibilityTarget is an optional interface for platforms that
 // want to customise the session key used when echoing relay request /
 // response messages into the group chat for visibility.  Platforms that

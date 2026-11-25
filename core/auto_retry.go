@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -237,6 +238,10 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 	for {
 		err := e.processInteractiveAttempt(state, session, sessions, sessionKey, msgID, turnStart, stopTyping, sendDone, replyCtx, r)
 		if r == nil || !e.waitAutoRetry(r, state, session, sessions, as, policy, err) {
+			if err == nil {
+				err = fmt.Errorf("%s", e.i18n.T(MsgRelayLiveInterrupted))
+			}
+			state.completeRelay("", err)
 			return
 		}
 		next := e.dispatchAutoRetry(r, state, session, sessions, as)

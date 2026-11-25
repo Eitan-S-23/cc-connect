@@ -741,6 +741,25 @@ const (
 	MsgNotifySaved                MsgKey = "notify_saved"
 	MsgNotifySaveFailed           MsgKey = "notify_save_failed"
 	MsgBuiltinCmdNotify           MsgKey = "notify"
+	MsgBuiltinCmdRelay            MsgKey = "relay"
+	MsgRelayLiveTitle             MsgKey = "relay_live_title"
+	MsgRelayLiveOn                MsgKey = "relay_live_on"
+	MsgRelayLiveOff               MsgKey = "relay_live_off"
+	MsgRelayLiveStatus            MsgKey = "relay_live_status"
+	MsgRelayLiveUsage             MsgKey = "relay_live_usage"
+	MsgRelayLiveSaved             MsgKey = "relay_live_saved"
+	MsgRelayLiveBusy              MsgKey = "relay_live_busy"
+	MsgRelayLiveInterrupted       MsgKey = "relay_live_interrupted"
+	MsgRelayLiveWaiting           MsgKey = "relay_live_waiting"
+	MsgRelayLiveReceived          MsgKey = "relay_live_received"
+	MsgRelayLivePrivateOnly       MsgKey = "relay_live_private_only"
+	MsgRelayLiveBindUsage         MsgKey = "relay_live_bind_usage"
+	MsgRelayLiveBindings          MsgKey = "relay_live_bindings"
+	MsgRelayLiveBound             MsgKey = "relay_live_bound"
+	MsgRelayLiveUnbound           MsgKey = "relay_live_unbound"
+	MsgRelayLiveInboxSaved        MsgKey = "relay_live_inbox_saved"
+	MsgRelayLiveNeedInbox         MsgKey = "relay_live_need_inbox"
+	MsgRelayLiveNotBound          MsgKey = "relay_live_not_bound"
 	MsgAttentionBlockedPermission MsgKey = "attention_blocked_permission"
 	MsgAttentionBlockedQuestion   MsgKey = "attention_blocked_question"
 	MsgAttentionTurnFailed        MsgKey = "attention_turn_failed"
@@ -1181,6 +1200,131 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "主動提醒",
 		LangJapanese:           "通知設定",
 		LangSpanish:            "Avisos de atención",
+	},
+	MsgBuiltinCmdRelay: {
+		LangEnglish:            "Instance-wide live delegation (/relay [on|off])",
+		LangChinese:            "整个实例的实时协作开关（/relay [on|off]）",
+		LangTraditionalChinese: "整個實例的即時協作開關（/relay [on|off]）",
+		LangJapanese:           "インスタンス全体のリアルタイム委任（/relay [on|off]）",
+		LangSpanish:            "Delegación en vivo de toda la instancia (/relay [on|off])",
+	},
+	MsgRelayLiveTitle: {
+		LangEnglish:            "Live Agent Delegation",
+		LangChinese:            "Agent 实时协作",
+		LangTraditionalChinese: "Agent 即時協作",
+		LangJapanese:           "エージェントのリアルタイム委任",
+		LangSpanish:            "Delegación de agentes en vivo",
+	},
+	MsgRelayLiveOn: {
+		LangEnglish: "On", LangChinese: "开启", LangTraditionalChinese: "開啟", LangJapanese: "オン", LangSpanish: "Activada",
+	},
+	MsgRelayLiveOff: {
+		LangEnglish: "Off", LangChinese: "关闭", LangTraditionalChinese: "關閉", LangJapanese: "オフ", LangSpanish: "Desactivada",
+	},
+	MsgRelayLiveStatus: {
+		LangEnglish:            "Live delegation: **%s**\n\nApplies to every bot in this cc-connect instance. On: private-chat binding, idle targets only, normal live output in the target's own chat. Off: legacy Relay. Existing tasks keep their accepted mode.",
+		LangChinese:            "实时协作：**%s**\n\n作用于当前 cc-connect 实例的全部机器人。开启：私聊绑定，仅空闲目标接单，在目标自己的窗口正常输出进度。关闭：原有 Relay。已接下的任务按原模式完成。",
+		LangTraditionalChinese: "即時協作：**%s**\n\n作用於目前 cc-connect 實例的全部機器人。開啟：私聊綁定，僅空閒目標接單，在目標自己的視窗正常輸出進度。關閉：原有 Relay。已接下的任務按原模式完成。",
+		LangJapanese:           "リアルタイム委任: **%s**\n\nこの cc-connect インスタンスの全ボットが対象です。オン: 個別チャットを関連付け、待機中の相手だけが受信し、自分のチャットに進捗を表示します。オフ: 従来の Relay。実行中のタスクのモードは変わりません。",
+		LangSpanish:            "Delegación en vivo: **%s**\n\nAfecta a todos los bots de esta instancia. Activada: vinculación privada, solo destinos inactivos y progreso en su propio chat. Desactivada: Relay anterior. Las tareas aceptadas conservan su modo.",
+	},
+	MsgRelayLiveUsage: {
+		LangEnglish:            "/relay [on|off]. Admin only for changes; saved across restarts. In B: /bind here. In A: /bind <B-project>.",
+		LangChinese:            "/relay [on|off]。修改需管理员，重启后保留。在 B 私聊：/bind here；在 A 私聊：/bind <B项目名>。",
+		LangTraditionalChinese: "/relay [on|off]。修改需管理員，重新啟動後保留。在 B 私聊：/bind here；在 A 私聊：/bind <B專案名>。",
+		LangJapanese:           "/relay [on|off]。変更は管理者のみ。再起動後も保持。B の個別チャット: /bind here。A: /bind <B-project>。",
+		LangSpanish:            "/relay [on|off]. Los cambios requieren administrador y persisten. En B: /bind here. En A: /bind <B-project>.",
+	},
+	MsgRelayLiveSaved: {
+		LangEnglish:            "Saved for all bots in this instance. Only future dispatches use the new mode.",
+		LangChinese:            "已对本实例全部机器人生效，仅影响之后的派发。",
+		LangTraditionalChinese: "已對本實例全部機器人生效，僅影響之後的派發。",
+		LangJapanese:           "このインスタンスの全ボットに保存しました。次の委任から適用されます。",
+		LangSpanish:            "Guardado para todos los bots de esta instancia. Solo afecta a las próximas delegaciones.",
+	},
+	MsgRelayLiveBusy: {
+		LangEnglish:            "Target is busy or still stopping. Task rejected; nothing was interrupted or queued. Retry only after it is idle.",
+		LangChinese:            "目标正在执行任务或尚未停止完成。本次派发已拒绝，未打断、未排队；请等目标空闲后重试。",
+		LangTraditionalChinese: "目標正在執行任務或尚未停止完成。本次派發已拒絕，未打斷、未排隊；請等目標空閒後重試。",
+		LangJapanese:           "相手は実行中または停止処理中です。委任は拒否され、中断もキュー登録もされていません。待機状態になってから再試行してください。",
+		LangSpanish:            "El destino está ocupado o deteniéndose. Tarea rechazada, sin interrupción ni cola. Reintenta cuando esté inactivo.",
+	},
+	MsgRelayLiveInterrupted: {
+		LangEnglish:            "Delegated turn stopped or failed before a final reply. Check the target chat before retrying.",
+		LangChinese:            "派发任务在最终回复前停止或失败，请先检查目标窗口再决定是否重试。",
+		LangTraditionalChinese: "派發任務在最終回覆前停止或失敗，請先檢查目標視窗再決定是否重試。",
+		LangJapanese:           "最終応答の前に委任タスクが停止または失敗しました。再試行前に相手のチャットを確認してください。",
+		LangSpanish:            "La tarea se detuvo o falló antes de la respuesta final. Revisa el chat de destino antes de reintentar.",
+	},
+	MsgRelayLiveWaiting: {
+		LangEnglish:            "Task accepted by %s. Waiting timed out; execution and live output continue in its own chat. Do not dispatch the same task again.",
+		LangChinese:            "%s 已接单。等待回复已超时，任务仍在其自己的窗口执行并持续输出；请勿重复派发。",
+		LangTraditionalChinese: "%s 已接單。等待回覆已逾時，任務仍在其自己的視窗執行並持續輸出；請勿重複派發。",
+		LangJapanese:           "%s が受信済みです。応答待ちはタイムアウトしましたが、相手のチャットで実行と進捗表示は続きます。重複して委任しないでください。",
+		LangSpanish:            "%s aceptó la tarea. La espera agotó el plazo; la ejecución y el progreso continúan en su chat. No dupliques la delegación.",
+	},
+	MsgRelayLiveReceived: {
+		LangEnglish:            "Task from %s:\n%s",
+		LangChinese:            "收到 %s 派发的任务：\n%s",
+		LangTraditionalChinese: "收到 %s 派發的任務：\n%s",
+		LangJapanese:           "%s からのタスク:\n%s",
+		LangSpanish:            "Tarea de %s:\n%s",
+	},
+	MsgRelayLivePrivateOnly: {
+		LangEnglish:            "Live delegation bindings require a supported private chat. Open the bot's private chat and use /bind there.",
+		LangChinese:            "实时协作绑定需要在支持的机器人私聊中操作，请打开机器人私聊再使用 /bind。",
+		LangTraditionalChinese: "即時協作綁定需要在支援的機器人私聊中操作，請開啟機器人私聊再使用 /bind。",
+		LangJapanese:           "リアルタイム委任の関連付けは対応する個別チャットで行ってください。ボットの個別チャットで /bind を使用します。",
+		LangSpanish:            "Los vínculos en vivo requieren un chat privado compatible. Abre el chat privado del bot y usa /bind allí.",
+	},
+	MsgRelayLiveBindUsage: {
+		LangEnglish:            "B: /bind here registers its inbox. A: /bind <project> binds B, /bind lists targets, /bind -<project> removes one, /bind remove clears this chat's live bindings.",
+		LangChinese:            "B：/bind here 登记收件窗口。A：/bind <项目名> 绑定 B，/bind 查看目标，/bind -<项目名> 解绑一个，/bind remove 清除本窗口的实时协作绑定。",
+		LangTraditionalChinese: "B：/bind here 登記收件視窗。A：/bind <專案名> 綁定 B，/bind 查看目標，/bind -<專案名> 解綁一個，/bind remove 清除本視窗的即時協作綁定。",
+		LangJapanese:           "B: /bind here で受信先登録。A: /bind <project> で関連付け、/bind で一覧、/bind -<project> で解除、/bind remove でこのチャットの関連付けを全解除。",
+		LangSpanish:            "B: /bind here registra el destino. A: /bind <project> vincula B, /bind lista destinos, /bind -<project> elimina uno, /bind remove elimina los vínculos de este chat.",
+	},
+	MsgRelayLiveBindings: {
+		LangEnglish:            "Live delegation targets: %s\nUse /bind help for setup.",
+		LangChinese:            "实时协作目标：%s\n使用 /bind help 查看设置方法。",
+		LangTraditionalChinese: "即時協作目標：%s\n使用 /bind help 查看設定方法。",
+		LangJapanese:           "リアルタイム委任先: %s\n設定方法: /bind help。",
+		LangSpanish:            "Destinos en vivo: %s\nConsulta /bind help para configurarlos.",
+	},
+	MsgRelayLiveBound: {
+		LangEnglish:            "Private delegation binding saved. The target accepts tasks only when idle and replies in its registered chat.",
+		LangChinese:            "私聊协作绑定已保存。目标仅在空闲时接单，并在登记的窗口输出。",
+		LangTraditionalChinese: "私聊協作綁定已儲存。目標僅在空閒時接單，並在登記的視窗輸出。",
+		LangJapanese:           "個別チャットの関連付けを保存しました。相手は待機中のみ受信し、登録したチャットに応答します。",
+		LangSpanish:            "Vínculo privado guardado. El destino solo acepta tareas estando inactivo y responde en su chat registrado.",
+	},
+	MsgRelayLiveUnbound: {
+		LangEnglish:            "Live binding removed. Accepted tasks continue.",
+		LangChinese:            "实时协作绑定已移除，已接下的任务继续执行。",
+		LangTraditionalChinese: "即時協作綁定已移除，已接下的任務繼續執行。",
+		LangJapanese:           "関連付けを解除しました。受信済みのタスクは続行します。",
+		LangSpanish:            "Vínculo eliminado. Las tareas aceptadas continúan.",
+	},
+	MsgRelayLiveInboxSaved: {
+		LangEnglish:            "This private chat is registered as this bot's delegation inbox. If the inbox moved, bind again from A. The global switch is unchanged.",
+		LangChinese:            "已将此私聊登记为本机器人的任务收件窗口。如果更换了窗口，请在 A 重新绑定。全局开关未改变。",
+		LangTraditionalChinese: "已將此私聊登記為本機器人的任務收件視窗。如果更換了視窗，請在 A 重新綁定。全域開關未改變。",
+		LangJapanese:           "この個別チャットを受信先として登録しました。受信先を変更した場合は A で再登録してください。全体設定は変わりません。",
+		LangSpanish:            "Este chat privado es el destino registrado del bot. Si cambió, vuelve a vincular desde A. El interruptor global no cambia.",
+	},
+	MsgRelayLiveNeedInbox: {
+		LangEnglish:            "Project %s is unavailable or has no inbox. In that bot's private chat, an admin must first send /bind here.",
+		LangChinese:            "项目 %s 未运行或尚未登记收件窗口。请先由管理员在该机器人的私聊发送 /bind here。",
+		LangTraditionalChinese: "專案 %s 未執行或尚未登記收件視窗。請先由管理員在該機器人的私聊發送 /bind here。",
+		LangJapanese:           "プロジェクト %s は利用不可または受信先未登録です。管理者が相手の個別チャットで /bind here を送信してください。",
+		LangSpanish:            "El proyecto %s no está disponible o no tiene destino. Un administrador debe enviar /bind here en su chat privado.",
+	},
+	MsgRelayLiveNotBound: {
+		LangEnglish:            "No valid private binding to this target. Use /bind <project> in the source chat. Available targets: %s",
+		LangChinese:            "此目标没有有效的私聊绑定，请在来源窗口使用 /bind <项目名>。可用目标：%s",
+		LangTraditionalChinese: "此目標沒有有效的私聊綁定，請在來源視窗使用 /bind <專案名>。可用目標：%s",
+		LangJapanese:           "相手への有効な個別チャット関連付けがありません。送信元で /bind <project> を使用してください。利用可能: %s",
+		LangSpanish:            "No hay vínculo privado válido al destino. Usa /bind <project> en el chat de origen. Destinos disponibles: %s",
 	},
 	MsgNotifyStatus: {
 		LangEnglish:            "Bot/project: **%s**\nAttention alerts: **%s**\n\nApplies to all conversations of this bot only. Controls extra completion, blocked and error notices; normal replies, permission buttons and questions are unchanged.",
@@ -5031,9 +5175,10 @@ IMPORTANT: <target_project> must be the EXACT project name from the /bind comman
 Do NOT guess or modify the name — use it exactly as shown (e.g. "gemini", not "gemini-bot").
 
 This sends a message to the target bot and waits for its response (printed to stdout).
-The conversation is visible in the group chat and each bot maintains its own relay session.
+With live delegation off, the conversation is visible in the group chat and each bot maintains its own relay session.
+With /relay on (instance-wide), an admin registers B's private inbox with /bind here and binds B from A's private chat with /bind <project>. No group is needed. B must be idle, runs in its normal conversation, and streams progress to its own inbox. A receives the final result. A busy rejection never queues work. An accepted/still-running timeout is not a failure: do not dispatch the task again; check B's chat.
 
-Environment variables CC_PROJECT and CC_SESSION_KEY are already set, so the relay knows which group chat to use.`,
+Environment variables CC_PROJECT and CC_SESSION_KEY are already set; preserve them so relay uses this source conversation.`,
 		LangChinese: `### Bot 之间转发 (relay)
 当需要和另一个 bot 通信(例如向另一个 AI agent 提问)时,使用:
 
@@ -5043,9 +5188,10 @@ Environment variables CC_PROJECT and CC_SESSION_KEY are already set, so the rela
 不要猜测或修改名字 —— 完全照搬显示值(例如 "gemini" 而不是 "gemini-bot")。
 
 这会把消息发给目标 bot 并等待它的回复(打印到 stdout)。
-会话在群聊里可见,每个 bot 维护自己的 relay 会话。
+关闭实时协作时，会话在群聊里可见，每个 bot 维护自己的 relay 会话。
+开启实例级 /relay on 后，管理员在 B 私聊 /bind here 登记收件窗口，在 A 私聊 /bind <项目名> 绑定，无需拉群。B 仅空闲时接单，任务进入 B 正常会话，进度持续输出到 B 自己的窗口，最终结果返回 A。忙碌拒单不会排队。“已接单，仍在执行”的等待超时不等于任务失败，不要重复派发，应查看 B 窗口。
 
-环境变量 CC_PROJECT 和 CC_SESSION_KEY 已经设置好,relay 知道用哪个群聊。`,
+环境变量 CC_PROJECT 和 CC_SESSION_KEY 已经设置好，保持原值以使用当前来源会话。`,
 	},
 }
 

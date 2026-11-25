@@ -60,14 +60,19 @@ type Session struct {
 	// sessions cannot permanently occupy the active slot.
 	ExplicitActivatedAt time.Time `json:"explicit_activated_at,omitempty"`
 
-	mu   sync.Mutex `json:"-"`
-	busy bool       `json:"-"`
+	mu       sync.Mutex `json:"-"`
+	busy     bool       `json:"-"`
+	activity *relayActivity
 }
 
 func (s *Session) TryLock() bool {
+	return s.tryLock(false)
+}
+
+func (s *Session) tryLock(reserved bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.busy {
+	if s.busy || !s.activity.start(reserved) {
 		return false
 	}
 	s.busy = true
@@ -93,6 +98,9 @@ func (s *Session) UnlockWithoutUpdate() {
 func (s *Session) unlock(update bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.busy {
+		s.activity.finish()
+	}
 	s.busy = false
 	if update {
 		s.UpdatedAt = time.Now()
@@ -338,9 +346,10 @@ type SessionManager struct {
 	// may have lost their AgentSessionID through /new or provider switches.
 	// KnownAgentSessionIDs returns nil to disable filterOwnedSessions.
 	legacyData bool
+	activity   *relayActivity
 }
 
-func NewSessionManager(storePath string) *SessionManager {
+func NewSessionManager(storePath string, activity ...*relayActivity) *SessionManager {
 	sm := &SessionManager{
 		sessions:      make(map[string]*Session),
 		activeSession: make(map[string]string),
@@ -351,6 +360,12 @@ func NewSessionManager(storePath string) *SessionManager {
 	}
 	if storePath != "" {
 		sm.load()
+	}
+	if len(activity) > 0 {
+		sm.activity = activity[0]
+		for _, s := range sm.sessions {
+			s.activity = sm.activity
+		}
 	}
 	return sm
 }
@@ -397,6 +412,7 @@ func (sm *SessionManager) NewSideSession(userKey, name string) *Session {
 	now := time.Now()
 	s := &Session{
 		ID:        id,
+		activity:  sm.activity,
 		Name:      name,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -412,6 +428,7 @@ func (sm *SessionManager) createLocked(userKey, name string) *Session {
 	now := time.Now()
 	s := &Session{
 		ID:        id,
+		activity:  sm.activity,
 		Name:      name,
 		CreatedAt: now,
 		UpdatedAt: now,

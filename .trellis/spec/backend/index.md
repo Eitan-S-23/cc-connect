@@ -5,6 +5,9 @@ describe contracts, not permission to build, install, restart or write elsewhere
 
 ## Pre-Development Checklist
 
+- [Live delegation](relay-live.md): global switch, private inbox routing,
+  atomic idle admission and normal conversation output.
+
 - [Release-first updates](release-first.md): tagged Actions artifacts, full-suite
   gates, unpublished-version ordering and updater-only deployment.
 - [Agent preferences](agent-preferences.md): durable mode/reasoning selections,

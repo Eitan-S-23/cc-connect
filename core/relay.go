@@ -29,12 +29,16 @@ type RelayBinding struct {
 
 // RelayManager coordinates bot-to-bot message relay across engines.
 type RelayManager struct {
-	mu         sync.RWMutex
-	engines    map[string]*Engine       // project name → engine (runtime only)
-	bindings   map[string]*RelayBinding // chatID → binding
-	storePath  string                   // empty = no persistence
-	timeout    time.Duration
-	visibility string
+	mu          sync.RWMutex
+	engines     map[string]*Engine       // project name → engine (runtime only)
+	bindings    map[string]*RelayBinding // chatID → binding
+	storePath   string                   // empty = no persistence
+	timeout     time.Duration
+	visibility  string
+	live        relayLiveState
+	livePath    string
+	liveError   error
+	liveDefault bool
 }
 
 func NewRelayManager(dataDir string) *RelayManager {
@@ -47,7 +51,9 @@ func NewRelayManager(dataDir string) *RelayManager {
 	if dataDir != "" {
 		rm.storePath = filepath.Join(dataDir, "relay_bindings.json")
 		rm.load()
+		rm.livePath = filepath.Join(dataDir, "relay_live.json")
 	}
+	rm.loadLive()
 	return rm
 }
 
@@ -203,6 +209,15 @@ type RelayResponse struct {
 
 // Send delivers a message from one bot to another and returns the response.
 func (rm *RelayManager) Send(ctx context.Context, req RelayRequest) (*RelayResponse, error) {
+	rm.mu.RLock()
+	loadErr := rm.liveError
+	rm.mu.RUnlock()
+	if loadErr != nil {
+		return nil, fmt.Errorf("relay: live settings unavailable; refusing fallback: %w", loadErr)
+	}
+	if rm.LiveEnabled() {
+		return rm.sendLive(ctx, req)
+	}
 	platform, chatID, err := parseSessionKeyParts(req.SessionKey)
 	if err != nil {
 		return nil, fmt.Errorf("relay: invalid session key: %w", err)

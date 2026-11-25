@@ -293,6 +293,7 @@ type RoleConfig struct {
 
 // RelayConfig controls bot-to-bot relay behavior.
 type RelayConfig struct {
+	Live        bool   `toml:"live,omitempty"`       // instance-wide idle-only dispatch into the target's registered private chat
 	TimeoutSecs *int   `toml:"timeout_secs"`         // max seconds to wait for relay response; 0 = disabled; default 120
 	Visibility  string `toml:"visibility,omitempty"` // "full" (default), "summary", or "none" for group visibility echoes
 }

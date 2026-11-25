@@ -939,6 +939,39 @@ The shell configuration applies to all command execution in cc-connect:
 
 Cross-platform bot communication in group chats.
 
+### Live Delegation in Private Chats
+
+Live delegation is disabled by default. `/relay` displays a switch card;
+administrators use `/relay on` or `/relay off`. This switch covers every project
+in one cc-connect process, survives restart, and overrides the initial
+`[relay] live = false` setting. Independent instances have independent switches.
+
+1. In B's private chat, an administrator sends `/bind here` to register its inbox.
+2. With live delegation enabled, in A's private chat send `/bind <B-project>`.
+3. A dispatches with `cc-connect relay send --to <B-project> --message "task"`.
+
+B must be online and idle across all project/workspace sessions. Running turns,
+pending permissions, retries, teardown and another accepted delegation reject
+the task immediately. No interruption or automatic queueing occurs. Idle checks
+and task admission are atomic; shell schedules also count as activity. External
+CLI processes outside cc-connect are not managed by this scheduler.
+
+Accepted tasks use B's current conversation, workspace, display settings and
+normal permission handling. Progress, tools, permission prompts and the final
+reply appear in B's registered chat. `/stop` there stops the task. The final
+result is returned to A; if the relay wait expires, A receives an explicit
+accepted/still-running receipt while B continues. Do not resubmit the task.
+After a wait timeout, view the eventual result in B's chat; the CLI is no longer
+waiting for the final result.
+
+`/bind` lists live targets, `/bind -<project>` removes one and `/bind remove`
+clears this source chat's live bindings. Legacy group bindings stay separate.
+Moving B's inbox invalidates incoming bindings, requiring A to bind again.
+Switching modes or removing bindings affects future dispatches only.
+Inbox registration and binding require administrators of the respective bots.
+Feishu/Lark supports private inbox registration; other adapters must implement
+private-chat verification before opting in. Unknown chat types are rejected.
+
 ### Group Chat Binding
 
 ```

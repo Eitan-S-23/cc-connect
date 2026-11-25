@@ -1288,6 +1288,7 @@ func main() {
 			}
 		}
 		relayMgr.SetVisibility(cfg.Relay.Visibility)
+		relayMgr.SetLiveDefault(cfg.Relay.Live)
 		apiSrv.SetRelayManager(relayMgr)
 
 		// Create shared DirHistory for all engines

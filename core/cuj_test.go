@@ -40,6 +40,10 @@ import (
 	"time"
 )
 
+func TestCUJ_Relay1_PrivateBindingStreamsInTargetAndReturnsResult(t *testing.T) {
+	runLivePrivateJourney(t)
+}
+
 func TestCUJ_D1_DirListBrowseHomeAndSelect(t *testing.T) {
 	dir := dirListFixture(t, 41)
 	e, _, p := dirListTestEngine(t, dir, LangEnglish)

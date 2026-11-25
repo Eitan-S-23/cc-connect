@@ -1,5 +1,7 @@
 # Unit-Test Contracts
 
+Read [live delegation](relay-live.md) for private routing and idle-only relay changes.
+
 This is a Go repository. Use `go test`, CUJ tests, `go vet` and Go compilation;
 generic `pnpm` examples do not define validation for these packages.
 
