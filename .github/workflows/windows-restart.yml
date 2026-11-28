@@ -1,0 +1,100 @@
+name: Windows restart and upgrade regression
+on:
+  push:
+    branches: ['codex/windows-restart-upgrade']
+permissions:
+  contents: read
+env:
+  GOENV: 'off'
+  GOWORK: 'off'
+  GOTOOLCHAIN: local
+  GOTELEMETRY: 'off'
+  GOFLAGS: -mod=readonly
+  PYTHONDONTWRITEBYTECODE: '1'
+jobs:
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 55
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Validate paths and prepare local tools
+        run: .github/windows-restart-env.ps1
+      - name: Build and vet on real Windows
+        run: |
+          .github/windows-ci-command.ps1 build go build -tags goolm,no_web ./...
+          .github/windows-ci-command.ps1 vet go vet -tags goolm,no_web ./...
+      - name: Prove the old updater fails with a mapped backup
+        run: |
+          git worktree add --detach .cache/baseline e2b9795d19ea26778dd8403d711f20748675d8ef
+          Copy-Item core/updater_locked_windows_test.go .cache/baseline/core/updater_locked_windows_test.go
+          Push-Location .cache/baseline
+          go test -tags goolm,no_web -count=1 -v ./core -run '^TestWindowsUpgradeWithMappedLegacyBackup$' 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE/.cache/evidence/baseline.log"
+          $code=$LASTEXITCODE
+          Pop-Location
+          if ($code -eq 0) { throw 'Pre-fix regression unexpectedly passed' }
+          if (-not (Select-String -Path .cache/evidence/baseline.log -SimpleMatch 'REGRESSION: mapped historical backup prevents the next upgrade')) { throw 'Baseline failed for an unrelated reason' }
+          Write-Host '::notice::Pre-fix mapped executable regression failed as expected.'
+      - name: Windows process, backup and restart regressions
+        run: .github/windows-ci-command.ps1 focused go test -tags goolm,no_web -count=1 -v -timeout 12m ./core ./daemon ./cmd/cc-connect -run 'Test(Windows|UpdateTransaction|RestartNotify|CUJ_U1|RunCommandInKillJob|AcquireSupervisor|WaitForSupervisor|AdoptExisting)'
+      - name: Full Windows tests
+        run: .github/windows-ci-command.ps1 windows-tests go test -tags goolm,no_web -count=1 -timeout 10m ./...
+      - name: Windows critical user journeys
+        run: .github/windows-ci-command.ps1 windows-cuj go test -tags goolm,no_web -count=1 -timeout 5m ./core -run TestCUJ
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-restart-evidence
+          path: .cache/evidence/
+          retention-days: 14
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      TMPDIR: ${{ github.workspace }}/.cache/tmp
+      TEMP: ${{ github.workspace }}/.cache/tmp
+      TMP: ${{ github.workspace }}/.cache/tmp
+      GOCACHE: ${{ github.workspace }}/.cache/go-build
+      GOMODCACHE: ${{ github.workspace }}/.cache/go-mod
+      GOPATH: ${{ github.workspace }}/.cache/go-path
+      GOBIN: ${{ github.workspace }}/.cache/go-path/bin
+      GOTMPDIR: ${{ github.workspace }}/.cache/tmp
+      PROJECT_TOOL_CACHE: ${{ github.workspace }}/.cache/tools
+      XDG_CACHE_HOME: ${{ github.workspace }}/.cache/xdg-cache
+      XDG_CONFIG_HOME: ${{ github.workspace }}/.cache/xdg-config
+      XDG_DATA_HOME: ${{ github.workspace }}/.cache/xdg-data
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Prepare project outputs
+        run: |
+          set -euo pipefail
+          for output in "$TMPDIR" "$GOCACHE" "$GOMODCACHE" "$GOPATH" "$GOBIN" "$GOTMPDIR" "$PROJECT_TOOL_CACHE" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"; do
+            case "$(realpath -m "$output")" in "$GITHUB_WORKSPACE"/*) ;; *) exit 1 ;; esac
+            mkdir -p "$output"
+          done
+      - name: Install pinned Go
+        run: bash .github/setup-release-tools.sh go
+      - name: Build and vet
+        run: |
+          bash .github/ci-command.sh build go build -tags goolm,no_web ./...
+          bash .github/ci-command.sh vet go vet -tags goolm,no_web ./...
+      - name: Full race tests and CUJ
+        run: |
+          bash .github/ci-command.sh tests go test -race -tags goolm,no_web -count=1 -timeout 10m ./...
+          bash .github/ci-command.sh cuj go test -race -tags goolm,no_web -count=1 -timeout 5m ./core -run TestCUJ
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-restart-evidence
+          path: .cache/verification/
+          retention-days: 14

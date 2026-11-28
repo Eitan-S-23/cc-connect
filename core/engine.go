@@ -106,8 +106,10 @@ var ErrAttachmentSendDisabled = errors.New("attachment send is disabled by confi
 
 // RestartRequest carries info needed to send a post-restart notification.
 type RestartRequest struct {
-	SessionKey string `json:"session_key"`
-	Platform   string `json:"platform"`
+	SessionKey    string `json:"session_key"`
+	Platform      string `json:"platform"`
+	TargetVersion string `json:"target_version,omitempty"`
+	Error         string `json:"error,omitempty"`
 }
 
 type replyFooterUsageCache struct {
@@ -291,7 +293,14 @@ func (e *Engine) dispatchRestartNotify(req *RestartRequest) error {
 		return fmt.Errorf("reconstruct reply ctx: %w", err)
 	}
 	text := e.i18n.T(MsgRestartSuccess)
-	if CurrentVersion != "" {
+	if req.TargetVersion != "" && strings.TrimPrefix(req.TargetVersion, "fork-") != strings.TrimPrefix(CurrentVersion, "fork-") && req.Error == "" {
+		req.Error = fmt.Sprintf("expected %s, running %s", req.TargetVersion, CurrentVersion)
+	}
+	if req.Error != "" {
+		text = e.i18n.Tf(MsgRestartFailed, req.Error)
+	} else if req.TargetVersion != "" {
+		text = e.i18n.Tf(MsgUpgradeActivated, CurrentVersion)
+	} else if CurrentVersion != "" {
 		text += fmt.Sprintf(" (%s)", CurrentVersion)
 	}
 
@@ -389,6 +398,7 @@ type AttentionNotifyCfg struct {
 
 // Engine routes messages between platforms and the agent for a single project.
 type Engine struct {
+	restartValidator      func() error
 	transientModelCatalog *ProjectStateStore
 	modelRefreshMu        sync.Mutex
 	updateService         releaseUpdateService
@@ -16210,6 +16220,12 @@ func (e *Engine) cmdUpgrade(p Platform, msg *Message, args []string) {
 }
 
 func (e *Engine) cmdUpgradeConfirm(p Platform, msg *Message) {
+	if e.restartValidator != nil {
+		if err := e.restartValidator(); err != nil {
+			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
+			return
+		}
+	}
 	cur := CurrentVersion
 	if cur == "" || cur == "dev" {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgUpgradeDevBuild))
@@ -16238,8 +16254,9 @@ func (e *Engine) cmdUpgradeConfirm(p Platform, msg *Message) {
 	// Auto-restart to apply the update
 	select {
 	case RestartCh <- RestartRequest{
-		SessionKey: msg.SessionKey,
-		Platform:   p.Name(),
+		SessionKey:    msg.SessionKey,
+		Platform:      p.Name(),
+		TargetVersion: release.TagName,
 	}:
 	default:
 	}
@@ -16260,6 +16277,12 @@ func (e *Engine) cmdConfigReload(p Platform, msg *Message) {
 }
 
 func (e *Engine) cmdRestart(p Platform, msg *Message) {
+	if e.restartValidator != nil {
+		if err := e.restartValidator(); err != nil {
+			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgRestartFailed, err))
+			return
+		}
+	}
 	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRestarting))
 	select {
 	case RestartCh <- RestartRequest{
@@ -16269,6 +16292,10 @@ func (e *Engine) cmdRestart(p Platform, msg *Message) {
 	default:
 	}
 }
+
+// SetRestartValidator binds platform-neutral command handling to the host's
+// lifecycle controller. It runs before installing any update bytes.
+func (e *Engine) SetRestartValidator(validate func() error) { e.restartValidator = validate }
 
 func (e *Engine) cmdAlias(p Platform, msg *Message, args []string) {
 	if len(args) == 0 {

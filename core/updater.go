@@ -238,7 +238,11 @@ func SelfUpdate(tag string) error {
 	if err != nil {
 		return err
 	}
-	if err := replaceBinaryAt(target, binary, os.Rename); err != nil {
+	if runtime.GOOS == "windows" {
+		if _, err := InstallUpdateTransaction(target, binary, tag); err != nil {
+			return err
+		}
+	} else if err := replaceBinaryAt(target, binary, os.Rename); err != nil {
 		return err
 	}
 	updateInstalled = true

@@ -42,6 +42,7 @@ func runDaemonSupervisor(args []string) {
 		}
 	}
 	if err := daemon.RunSupervisor(daemon.SupervisorConfig{
+		Version:    version,
 		BinaryPath: binaryPath,
 		ConfigPath: *configPath,
 		WorkDir:    filepath.Dir(*configPath),

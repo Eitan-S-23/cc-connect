@@ -129,6 +129,13 @@ func RunSupervisor(cfg SupervisorConfig) error {
 	}
 	defer logWriter.Close()
 	resolved.logWriter = logWriter
+	resolved.restartEnv, err = supervisorRestartEnvironment(resolved)
+	if err != nil {
+		return err
+	}
+	if err := recordSupervisorStartup(resolved); err != nil {
+		return err
+	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(logWriter, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	slog.Info("daemon supervisor started", "binary", resolved.BinaryPath, "config", resolved.ConfigPath)
 	lockPath := instanceLockPath(resolved.ConfigPath)
@@ -263,6 +270,7 @@ func runSupervisedInstance(cfg SupervisorConfig) error {
 		supervisedProcessEnv: "1",
 		"CC_LOG_FILE":        "",
 	})
+	cmd.Env = setWindowsEnv(cmd.Env, cfg.restartEnv)
 	cmd.Stdout = cfg.logWriter
 	cmd.Stderr = cfg.logWriter
 	cmd.SysProcAttr = &syscall.SysProcAttr{

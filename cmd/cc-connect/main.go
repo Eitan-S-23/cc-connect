@@ -231,6 +231,13 @@ var topLevelCommandHandlers = map[string]func([]string){
 }
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "_daemon-restart-controller" {
+		if err := daemon.RunRestartController(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "Restart controller:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// Agy hooks require stdout to contain only the final JSON decision. Handle
 	// this internal command before update checks, logging, or normal CLI setup.
 	if len(os.Args) > 1 && os.Args[1] == "_agy-permission-hook" {
@@ -313,6 +320,11 @@ func main() {
 	core.CurrentBuildTime = buildTime
 
 	configPath := resolveConfigPath(rootOpts.configPath)
+	startupBinary, startupErr := os.Executable()
+	startupDigest := ""
+	if startupErr == nil {
+		startupDigest, startupErr = core.ExecutableSHA256(startupBinary)
+	}
 
 	// Handle --force: kill any existing instance before we try to acquire the lock
 	if rootOpts.force {
@@ -1325,7 +1337,17 @@ func main() {
 		apiSrv.Start()
 	}
 
+	for _, e := range engines {
+		e.SetRestartValidator(func() error { return daemon.ValidateRestart(configPath) })
+	}
 	slog.Info("cc-connect is running", "projects", len(engines))
+	activationErr := startupErr
+	if activationErr == nil {
+		activationErr = daemon.ConfirmRestartReady(configPath, version, startupDigest)
+	}
+	if activationErr != nil {
+		slog.Error("instance activation not confirmed", "error", activationErr)
+	}
 
 	// After startup, check if we were restarted and queue the success
 	// notification. The engine dispatches it on the first OnPlatformReady
@@ -1333,6 +1355,9 @@ func main() {
 	// platforms that need 2-3s to actually connect (e.g. Telegram) do not
 	// silently drop the notify. See issue #1383.
 	if notify := core.ConsumeRestartNotify(cfg.DataDir); notify != nil {
+		if activationErr != nil {
+			notify.Error = activationErr.Error()
+		}
 		slog.Info("post-restart: queuing success notification", "platform", notify.Platform, "session", notify.SessionKey)
 		for _, e := range engines {
 			e.SetPendingRestartNotify(notify)
@@ -1343,11 +1368,33 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	var restartReq *core.RestartRequest
-	select {
-	case <-sigCh:
-	case req := <-core.RestartCh:
-		restartReq = &req
-		slog.Info("restart requested via /restart command", "session", req.SessionKey, "platform", req.Platform)
+	var preparedRestart *daemon.PreparedRestart
+waitForShutdown:
+	for {
+		select {
+		case <-sigCh:
+			break waitForShutdown
+		case req := <-core.RestartCh:
+			execPath, err := os.Executable()
+			if err == nil {
+				targetVersion := req.TargetVersion
+				if targetVersion == "" {
+					targetVersion = version
+				}
+				preparedRestart, err = daemon.PrepareRestart(configPath, cfg.DataDir, execPath, targetVersion)
+			}
+			if err != nil {
+				slog.Error("restart preparation failed; current instance retained", "error", err)
+				req.Error = err.Error()
+				for _, e := range engines {
+					e.SetPendingRestartNotify(&req)
+				}
+				continue
+			}
+			restartReq = &req
+			slog.Info("restart requested", "session", req.SessionKey, "platform", req.Platform, "target_version", req.TargetVersion)
+			break waitForShutdown
+		}
 	}
 
 	slog.Info("shutting down...")
@@ -1383,6 +1430,16 @@ func main() {
 	if restartReq != nil {
 		if err := core.SaveRestartNotify(cfg.DataDir, *restartReq); err != nil {
 			slog.Error("restart: save notify failed", "error", err)
+			os.Exit(1)
+		}
+		if preparedRestart != nil {
+			if err := preparedRestart.Commit(); err != nil {
+				slog.Error("restart: shutdown commit failed", "error", err)
+				os.Exit(1)
+			}
+			// The independent task owns replacement. Never create a replacement
+			// child in the old supervisor's kill-on-close Job Object.
+			return
 		}
 		execPath, err := os.Executable()
 		if err != nil {

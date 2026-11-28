@@ -329,7 +329,7 @@ func TestUpdateReplacePreservesBackupAndRollsBack(t *testing.T) {
 				}
 				return os.Rename(src, dst)
 			}
-			err := replaceBinaryAt(target, []byte("new"), renamer)
+			err := replaceBinaryLegacy(target, []byte("new"), renamer)
 			if (err == nil) != (failure == "none") {
 				t.Fatal(err)
 			}

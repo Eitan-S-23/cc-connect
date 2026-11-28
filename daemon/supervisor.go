@@ -15,6 +15,7 @@ const (
 )
 
 type SupervisorConfig struct {
+	Version      string
 	BinaryPath   string
 	ConfigPath   string
 	WorkDir      string
@@ -23,6 +24,7 @@ type SupervisorConfig struct {
 	LogBackups   int
 	RestartDelay time.Duration
 	logWriter    io.Writer
+	restartEnv   map[string]string
 }
 
 func (cfg SupervisorConfig) resolve() (SupervisorConfig, error) {

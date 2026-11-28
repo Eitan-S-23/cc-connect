@@ -532,8 +532,10 @@ const (
 	MsgDoctorTitle   MsgKey = "doctor_title"
 	MsgDoctorSummary MsgKey = "doctor_summary"
 
-	MsgRestarting     MsgKey = "restarting"
-	MsgRestartSuccess MsgKey = "restart_success"
+	MsgRestarting       MsgKey = "restarting"
+	MsgRestartSuccess   MsgKey = "restart_success"
+	MsgRestartFailed    MsgKey = "restart_failed"
+	MsgUpgradeActivated MsgKey = "upgrade_activated"
 
 	MsgUpgradeChecking    MsgKey = "upgrade_checking"
 	MsgUpgradeUpToDate    MsgKey = "upgrade_up_to_date"
@@ -3797,6 +3799,20 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "✅ cc-connect の再起動が完了しました。",
 		LangSpanish:            "✅ cc-connect se reinició correctamente.",
 	},
+	MsgRestartFailed: {
+		LangEnglish:            "❌ Restart/activation failed: %s",
+		LangChinese:            "❌ 重启或升级生效失败：%s",
+		LangTraditionalChinese: "❌ 重啟或升級生效失敗：%s",
+		LangJapanese:           "❌ 再起動または更新の適用に失敗しました: %s",
+		LangSpanish:            "❌ Error al reiniciar o activar la actualización: %s",
+	},
+	MsgUpgradeActivated: {
+		LangEnglish:            "✅ Update active: %s. The running instance has been verified.",
+		LangChinese:            "✅ 升级已生效：%s。运行实例已核验。",
+		LangTraditionalChinese: "✅ 升級已生效：%s。執行個體已核驗。",
+		LangJapanese:           "✅ 更新を適用しました: %s。実行中のインスタンスを確認しました。",
+		LangSpanish:            "✅ Actualización activa: %s. Instancia en ejecución verificada.",
+	},
 	MsgUpgradeChecking: {
 		LangEnglish:            "🔍 Checking for updates...",
 		LangChinese:            "🔍 正在检查更新...",
@@ -3846,11 +3862,11 @@ var messages = map[MsgKey]map[Language]string{
 		LangSpanish:            "⬇️ Descargando %s ...",
 	},
 	MsgUpgradeSuccess: {
-		LangEnglish:            "✅ Updated to **%s** successfully! Restarting...",
-		LangChinese:            "✅ 已成功更新到 **%s**！正在重启...",
-		LangTraditionalChinese: "✅ 已成功更新到 **%s**！正在重啟...",
-		LangJapanese:           "✅ **%s** に更新しました！再起動中...",
-		LangSpanish:            "✅ ¡Actualizado a **%s** con éxito! Reiniciando...",
+		LangEnglish:            "📦 **%s** installed on disk. Restarting; activation is not yet confirmed...",
+		LangChinese:            "📦 **%s** 已安装到磁盘。正在重启，尚未确认升级生效...",
+		LangTraditionalChinese: "📦 **%s** 已安裝到磁碟。正在重啟，尚未確認升級生效...",
+		LangJapanese:           "📦 **%s** をディスクにインストールしました。再起動して適用を確認します...",
+		LangSpanish:            "📦 **%s** instalado en disco. Reiniciando; activación pendiente...",
 	},
 	MsgUpgradeDevBuild: {
 		LangEnglish:            "⚠️ Running a dev build — version check is not available. Please build from source or install a release version.",

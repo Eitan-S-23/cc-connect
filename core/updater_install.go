@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -210,6 +211,14 @@ func isNpmExecutable(target string) bool {
 
 // The injected rename lets tests fail the install step without global hooks.
 func replaceBinaryAt(target string, data []byte, rename func(string, string) error) error {
+	if runtime.GOOS == "windows" {
+		_, err := installUpdateTransaction(target, data, "", rename)
+		return err
+	}
+	return replaceBinaryLegacy(target, data, rename)
+}
+
+func replaceBinaryLegacy(target string, data []byte, rename func(string, string) error) error {
 	info, err := os.Lstat(target)
 	if err != nil {
 		return err
