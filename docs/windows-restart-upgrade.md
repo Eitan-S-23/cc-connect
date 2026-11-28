@@ -70,8 +70,8 @@ serialized with the existing exclusive update lock. A pending transaction blocks
 another installation until activation or recovery. Installation failure restores
 the previous executable; rollback failure reports the surviving backup path.
 Startup failure stops the failed task before restoring the checked old image
-and starting the original task. Recovery keeps a failure receipt and suppresses
-the old generic restart-success notification. Starting the recovered task is
+and starting the original task. Recovery keeps a failure receipt and preserves the original notification
+destination with an explicit activation error instead of restart success. Starting the recovered task is
 reported separately from verifying its health.
 
 The old unmanaged `.old` file is never reused or automatically deleted. The two
@@ -93,7 +93,10 @@ to bypass a running controller or unresolved transaction.
 ## Verification and limitations
 
 `.github/workflows/windows-restart.yml` runs on the development branch only. It
-publishes test evidence artifacts, not a Release. All selected build, cache,
+publishes test evidence artifacts, not a Release. The existing fork verification
+workflow also runs on this development branch for Web assets, the complete
+Linux race/CUJ suite, vet and all six build targets; its publication job remains
+restricted to release tags. All selected build, cache,
 temporary and evidence outputs are inside the Actions workspace, with Windows
 reparse-point checks before creation. A checksum-pinned Go toolchain is installed
 there. Windows integration tests require `CC_WINDOWS_TASK_TESTS=1`; absence of
@@ -105,7 +108,8 @@ real mapped executables, deferred cleanup, actual ACL denial, transaction errors
 activation notifications and real isolated scheduled tasks. Test tasks run only
 test executables and synthetic state; they never parse live credentials or
 connect to a bot. PowerShell and Python fixture launchers exercise reuse of an
-existing task action. Existing Job Object cleanup tests remain required.
+existing task action. A supervisor built from the actual baseline also exercises
+legacy -> fixed A (activation withheld) -> full task restart -> fixed B. Existing Job Object cleanup tests remain required.
 
 The private/local `windows-startup/cc_launcher.py` and the user's Windows checkout
 are not present in the Linux development workspace. Generic Python fixture

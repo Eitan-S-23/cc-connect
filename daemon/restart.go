@@ -112,5 +112,11 @@ func (p *PreparedRestart) Commit() error {
 	if p == nil {
 		return nil
 	}
+	var completed restartResult
+	if err := readRestartJSON(filepath.Join(p.directory, "result.json"), &completed); err == nil {
+		return fmt.Errorf("restart controller already finished before shutdown: %s", completed.Error)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	return writeRestartJSON(filepath.Join(p.directory, "shutdown-ready.json"), restartResult{ID: p.id})
 }

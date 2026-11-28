@@ -260,6 +260,10 @@ func PrepareRestart(config, dataDir, binary, version string) (*PreparedRestart, 
 	if err != nil {
 		return nil, err
 	}
+	dataDir, err = filepath.Abs(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	supervisor, err := currentSupervisor(config, "", "")
 	if err != nil {
 		return nil, err
@@ -275,16 +279,6 @@ func PrepareRestart(config, dataDir, binary, version string) (*PreparedRestart, 
 	digest, err := core.ExecutableSHA256(binary)
 	if err != nil {
 		return nil, err
-	}
-	dir := restartDirectory(config)
-	if err := core.CheckUpdatePath(dir); err != nil {
-		return nil, err
-	}
-	if err := clearCompletedRestart(dir); err != nil {
-		return nil, err
-	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("another restart is pending or its directory is unavailable: %w", err)
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -309,6 +303,17 @@ func PrepareRestart(config, dataDir, binary, version string) (*PreparedRestart, 
 			plan.Version = tx.Version
 		}
 	}
+	dir := restartDirectory(config)
+	if err := core.CheckUpdatePath(dir); err != nil {
+		return nil, err
+	}
+	if err := clearCompletedRestart(dir); err != nil {
+		return nil, err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("another restart is pending or its directory is unavailable: %w", err)
+	}
+	plan.Created = time.Now().UTC()
 	planPath := filepath.Join(dir, "plan.json")
 	if err := writeRestartJSON(planPath, plan); err != nil {
 		return nil, err
@@ -653,10 +658,24 @@ func rollbackRestart(plan restartPlan) string {
 	if err := core.RollbackUpdate(plan.Binary); err != nil {
 		return "rollback failed: " + err.Error()
 	}
-	// Old releases cannot interpret failed activation notifications. Suppress
-	// their generic success message and retain the controller's failure receipt.
-	if err := os.Remove(filepath.Join(plan.DataDir, "run", "restart_notify")); err != nil && !os.IsNotExist(err) {
-		return "binary restored, notification cleanup failed: " + err.Error()
+	// Transaction-based rollback is created by a version that already supports
+	// failed-activation notifications. Preserve the destination and report failure
+	// when the previous executable reconnects; never leave a generic success.
+	notifyPath := filepath.Join(plan.DataDir, "run", "restart_notify")
+	if err := core.CheckUpdatePath(notifyPath); err != nil {
+		return "binary restored, notification path rejected: " + err.Error()
+	}
+	if data, err := os.ReadFile(notifyPath); err == nil {
+		var notify core.RestartRequest
+		if err := json.Unmarshal(data, &notify); err != nil {
+			return "binary restored, invalid restart notification: " + err.Error()
+		}
+		notify.Error = fmt.Sprintf("update to %s did not activate; previous executable restored", plan.Version)
+		if err := core.SaveRestartNotify(plan.DataDir, notify); err != nil {
+			return "binary restored, failure notification could not be saved: " + err.Error()
+		}
+	} else if !os.IsNotExist(err) {
+		return "binary restored, restart notification could not be read: " + err.Error()
 	}
 	if err := startBoundTask(plan.Task); err != nil {
 		return "binary restored; old instance start failed: " + err.Error()

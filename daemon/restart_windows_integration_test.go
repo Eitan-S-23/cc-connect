@@ -342,6 +342,9 @@ Start-ScheduledTask -TaskName %s
 			t.Log("real task: restart, A -> B -> C, restart, C -> D; old processes exited, one instance retained, state preserved")
 			if launcher == "powershell" {
 				old := current
+				if err := core.SaveRestartNotify(dir, core.RestartRequest{SessionKey: "isolated-session", Platform: "fixture", TargetVersion: "BROKEN"}); err != nil {
+					t.Fatal(err)
+				}
 				if err := writeRestartJSON(filepath.Join(dir, "request.json"), fixtureRequest{Action: "upgrade", Image: images["BROKEN"], Version: "BROKEN"}); err != nil {
 					t.Fatal(err)
 				}
@@ -354,6 +357,10 @@ Start-ScheduledTask -TaskName %s
 					t.Fatal("failed startup did not restore D", version, err)
 				}
 				waitFixtureControllerExit(t, config)
+				notify := core.ConsumeRestartNotify(dir)
+				if notify == nil || notify.Error == "" || notify.SessionKey != "isolated-session" {
+					t.Fatal("rollback lost failure notification", notify)
+				}
 				t.Log("unstartable next supervisor: timed out, restored D, failure preserved in receipt")
 			}
 		})
