@@ -439,7 +439,10 @@ func ConfirmRestartReady(config, version, digest string) error {
 		if previous.Error != "" {
 			return fmt.Errorf("previous restart failed: %s; %s", previous.Error, previous.Rollback)
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return activateRunningUpdate(version, digest)
 	}
 	main, idErr := identifyProcess(uint32(os.Getpid()))
 	if idErr != nil {

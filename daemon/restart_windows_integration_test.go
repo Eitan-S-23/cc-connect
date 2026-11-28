@@ -148,12 +148,18 @@ func runRestartFixture(config string) error {
 			return nil
 		}
 		err := ValidateRestart(config)
-		if err == nil && request.Action == "upgrade" {
+		if err == nil && (request.Action == "upgrade" || request.Action == "install-only") {
 			var data []byte
 			data, err = os.ReadFile(request.Image)
 			if err == nil {
 				_, err = core.InstallUpdateTransaction(exe, data, request.Version)
 			}
+		}
+		if err == nil && request.Action == "install-only" {
+			if err := writeRestartJSON(filepath.Join(dir, "installed.json"), request); err != nil {
+				return err
+			}
+			continue
 		}
 		if err == nil {
 			requested := request.Version
@@ -236,7 +242,7 @@ func TestWindowsTaskRestartContinuousUpgrades(t *testing.T) {
 				t.Fatal(err)
 			}
 			images := map[string]string{}
-			for _, version := range []string{"A", "B", "C", "D", "BROKEN"} {
+			for _, version := range []string{"A", "B", "C", "D", "E", "BROKEN"} {
 				path := filepath.Join(dir, version+".exe")
 				data := append(append([]byte(nil), image...), []byte(fixtureMarker+version+"\n")...)
 				if err := os.WriteFile(path, data, 0o700); err != nil {
@@ -340,6 +346,52 @@ Start-ScheduledTask -TaskName %s
 				}
 			}
 			t.Log("real task: restart, A -> B -> C, restart, C -> D; old processes exited, one instance retained, state preserved")
+			if launcher == "python" {
+				// A CLI install followed by an external task restart must also
+				// activate its receipt when a previous successful plan remains.
+				if err := writeRestartJSON(filepath.Join(dir, "request.json"), fixtureRequest{Action: "install-only", Image: images["E"], Version: "E"}); err != nil {
+					t.Fatal(err)
+				}
+				deadline := time.Now().Add(30 * time.Second)
+				for {
+					var installed fixtureRequest
+					if readRestartJSON(filepath.Join(dir, "installed.json"), &installed) == nil && installed.Version == "E" {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("isolated CLI install did not finish")
+					}
+					time.Sleep(50 * time.Millisecond)
+				}
+				fingerprint, err := taskFingerprint("\\", taskName)
+				if err != nil {
+					t.Fatal(err)
+				}
+				task := restartTask{Name: taskName, Path: "\\", Fingerprint: fingerprint}
+				main, err := openIdentifiedProcess(current.Main)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer windows.CloseHandle(main)
+				supervisor, err := openIdentifiedProcess(current.Supervisor)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer windows.CloseHandle(supervisor)
+				if err := stopBoundTask(task, []windows.Handle{main, supervisor}, time.Now().Add(30*time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				if err := startBoundTask(task); err != nil {
+					t.Fatal(err)
+				}
+				current = waitFixture(t, readyPath, func(r restartReady) bool { return r.Version == "E" })
+				if current.Error != "" {
+					t.Fatal(current.Error)
+				}
+				if pending, err := core.PendingUpdate(binary); err != nil || pending != nil {
+					t.Fatal("external task restart did not activate pending CLI update", pending, err)
+				}
+			}
 			if launcher == "powershell" {
 				old := current
 				if err := core.SaveRestartNotify(dir, core.RestartRequest{SessionKey: "isolated-session", Platform: "fixture", TargetVersion: "BROKEN"}); err != nil {
