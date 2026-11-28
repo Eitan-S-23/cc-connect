@@ -54,12 +54,34 @@ jobs:
           .github/windows-ci-command.ps1 build go build -tags 'goolm,no_web' ./...
           .github/windows-ci-command.ps1 vet go vet -tags 'goolm,no_web' ./...
       - name: Full Windows tests
+        id: windows_suite
         run: .github/windows-ci-command.ps1 windows-tests go test -json -tags 'goolm,no_web' -count=1 -timeout 10m ./...
       - name: Windows critical user journeys
-        run: .github/windows-ci-command.ps1 windows-cuj go test -tags 'goolm,no_web' -count=1 -timeout 5m ./core -run TestCUJ
+        if: always() && (steps.windows_suite.outcome == 'success' || steps.windows_suite.outcome == 'failure')
+        run: .github/windows-ci-command.ps1 windows-cuj go test -json -tags 'goolm,no_web' -count=1 -timeout 5m ./core -run TestCUJ
       - name: Record Windows skips and results
         if: always()
-        run: python -B .github/summarize-restart-tests.py .cache/evidence/windows-tests.log
+        run: |
+          python -B .github/summarize-restart-tests.py .cache/evidence/windows-tests.log
+          python -B .github/summarize-restart-tests.py .cache/evidence/windows-cuj.log
+      - name: Compare full-suite failures with unchanged baseline
+        if: always() && steps.windows_suite.outcome == 'failure'
+        run: |
+          # Remove only the two fixtures this workflow copied into the baseline.
+          Remove-Item .cache/baseline/core/updater_locked_windows_test.go
+          Remove-Item .cache/baseline/daemon/legacy-supervisor_windows_test.go
+          Push-Location .cache/baseline
+          go test -json -tags 'goolm,no_web' -count=1 -timeout 10m ./... 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE/.cache/evidence/baseline-tests.log"
+          $baselineCode=$LASTEXITCODE
+          go test -json -tags 'goolm,no_web' -count=1 -timeout 5m ./core -run TestCUJ 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE/.cache/evidence/baseline-cuj.log"
+          $baselineCujCode=$LASTEXITCODE
+          Pop-Location
+          Write-Host "::notice::Unchanged baseline full-suite exit: $baselineCode; CUJ exit: $baselineCujCode. The fixed-source failure remains a failed check."
+          python -B .github/summarize-restart-tests.py .cache/evidence/baseline-tests.log
+          python -B .github/summarize-restart-tests.py .cache/evidence/baseline-cuj.log
+          python -B .github/compare-windows-baseline.py .cache/evidence/windows-tests.summary.json .cache/evidence/baseline-tests.summary.json
+          python -B .github/compare-windows-baseline.py .cache/evidence/windows-cuj.summary.json .cache/evidence/baseline-cuj.summary.json
+          exit 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
