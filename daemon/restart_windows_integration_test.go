@@ -334,6 +334,21 @@ Start-ScheduledTask -TaskName %s
 				}
 			}
 			t.Log("real task: restart, A -> B -> C, restart, C -> D; old processes exited, one instance retained, state preserved")
+			if launcher == "powershell" {
+				old := current
+				if err := writeRestartJSON(filepath.Join(dir, "request.json"), fixtureRequest{Action: "upgrade", Image: images["BROKEN"], Version: "BROKEN"}); err != nil {
+					t.Fatal(err)
+				}
+				recovered := waitFixture(t, readyPath, func(r restartReady) bool { return r.Main != old.Main && r.Version == "D" })
+				if recovered.Error == "" {
+					t.Fatal("failed startup reported successful activation")
+				}
+				waitFixtureProcessesExit(t, old)
+				if version, err := fixtureVersion(binary); err != nil || version != "D" {
+					t.Fatal("failed startup did not restore D", version, err)
+				}
+				t.Log("unstartable next supervisor: timed out, restored D, failure preserved in receipt")
+			}
 		})
 	}
 }
@@ -358,5 +373,64 @@ func TestWindowsRestartRejectsReusedPID(t *testing.T) {
 	if h, err := openIdentifiedProcess(id); err == nil {
 		windows.CloseHandle(h)
 		t.Fatal("PID without matching creation time accepted")
+	}
+}
+
+func TestWindowsRestartStopTimeoutDoesNotStartReplacement(t *testing.T) {
+	original := runPowerShell
+	t.Cleanup(func() { runPowerShell = original })
+	starts := 0
+	runPowerShell = func(script string) (string, error) {
+		if strings.Contains(script, "Export-ScheduledTask") {
+			return "isolated task", nil
+		}
+		if strings.Contains(script, "Start-ScheduledTask") {
+			starts++
+		}
+		return "Running", nil
+	}
+	fingerprint, err := taskFingerprint("\\", "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identifyProcess(uint32(os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := openIdentifiedProcess(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(h)
+	err = stopBoundTask(restartTask{Name: "fixture", Path: "\\", Fingerprint: fingerprint}, []windows.Handle{h}, time.Now().Add(100*time.Millisecond))
+	if err == nil || !strings.Contains(err.Error(), "stop timeout") || starts != 0 {
+		t.Fatalf("stop timeout was hidden: %v, starts %d", err, starts)
+	}
+	if processExited(h) {
+		t.Fatal("timed-out stop killed an unverified process")
+	}
+}
+
+func TestWindowsRestartRefusesChangedTaskAndReportsStartFailure(t *testing.T) {
+	original := runPowerShell
+	t.Cleanup(func() { runPowerShell = original })
+	runPowerShell = func(string) (string, error) { return "old definition", nil }
+	fingerprint, err := taskFingerprint("\\", "fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := restartTask{Name: "fixture", Path: "\\", Fingerprint: fingerprint}
+	runPowerShell = func(string) (string, error) { return "changed definition", nil }
+	if err := startBoundTask(task); err == nil || !strings.Contains(err.Error(), "definition changed") {
+		t.Fatal("changed task accepted", err)
+	}
+	runPowerShell = func(script string) (string, error) {
+		if strings.Contains(script, "Export-ScheduledTask") {
+			return "old definition", nil
+		}
+		return "", os.ErrPermission
+	}
+	if err := startBoundTask(task); err == nil || !strings.Contains(err.Error(), "start current") {
+		t.Fatal("start failure hidden", err)
 	}
 }
