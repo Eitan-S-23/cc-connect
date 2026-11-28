@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -320,10 +321,14 @@ func main() {
 	core.CurrentBuildTime = buildTime
 
 	configPath := resolveConfigPath(rootOpts.configPath)
-	startupBinary, startupErr := os.Executable()
+	var startupErr error
 	startupDigest := ""
-	if startupErr == nil {
-		startupDigest, startupErr = core.ExecutableSHA256(startupBinary)
+	if runtime.GOOS == "windows" {
+		var startupBinary string
+		startupBinary, startupErr = os.Executable()
+		if startupErr == nil {
+			startupDigest, startupErr = core.ExecutableSHA256(startupBinary)
+		}
 	}
 
 	// Handle --force: kill any existing instance before we try to acquire the lock
@@ -1356,7 +1361,7 @@ func main() {
 		if activationErr != nil {
 			notify.Error = activationErr.Error()
 		}
-		slog.Info("post-restart: queuing success notification", "platform", notify.Platform, "session", notify.SessionKey)
+		slog.Info("post-restart: queuing activation result", "platform", notify.Platform, "session", notify.SessionKey)
 		for _, e := range engines {
 			e.SetPendingRestartNotify(notify)
 		}

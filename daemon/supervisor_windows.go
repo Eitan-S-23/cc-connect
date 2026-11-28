@@ -150,6 +150,9 @@ func RunSupervisor(cfg SupervisorConfig) error {
 		} else {
 			slog.Warn("daemon supervisor: cc-connect exited normally; restarting")
 		}
+		if err := waitForCommittedRestart(resolved); err != nil {
+			return err
+		}
 		time.Sleep(resolved.RestartDelay)
 	}
 }

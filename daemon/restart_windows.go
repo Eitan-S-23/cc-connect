@@ -684,3 +684,34 @@ func recordSupervisorStartup(cfg SupervisorConfig) error {
 	}
 	return writeRestartJSON(filepath.Join(dir, "startup.json"), id)
 }
+
+func waitForCommittedRestart(cfg SupervisorConfig) error {
+	dir := restartDirectory(cfg.ConfigPath)
+	var plan restartPlan
+	if err := readRestartJSON(filepath.Join(dir, "plan.json"), &plan); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	id, err := identifyProcess(uint32(os.Getpid()))
+	if err != nil {
+		return err
+	}
+	if plan.Supervisor != id {
+		return nil
+	}
+	var ready restartResult
+	if readRestartJSON(filepath.Join(dir, "shutdown-ready.json"), &ready) != nil || ready.ID != plan.ID {
+		return nil
+	}
+	// The old supervisor must not race the independent controller by spawning
+	// another business child between committed shutdown and task stop.
+	for time.Now().Before(plan.Created.Add(plan.Timeout * 2)) {
+		var result restartResult
+		if readRestartJSON(filepath.Join(dir, "result.json"), &result) == nil {
+			return fmt.Errorf("committed task restart ended: %s", result.Error)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("committed restart controller did not stop the old supervisor before timeout")
+}
