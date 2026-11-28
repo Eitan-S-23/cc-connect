@@ -54,9 +54,12 @@ jobs:
           .github/windows-ci-command.ps1 build go build -tags 'goolm,no_web' ./...
           .github/windows-ci-command.ps1 vet go vet -tags 'goolm,no_web' ./...
       - name: Full Windows tests
-        run: .github/windows-ci-command.ps1 windows-tests go test -tags 'goolm,no_web' -count=1 -timeout 10m ./...
+        run: .github/windows-ci-command.ps1 windows-tests go test -json -tags 'goolm,no_web' -count=1 -timeout 10m ./...
       - name: Windows critical user journeys
         run: .github/windows-ci-command.ps1 windows-cuj go test -tags 'goolm,no_web' -count=1 -timeout 5m ./core -run TestCUJ
+      - name: Record Windows skips and results
+        if: always()
+        run: python -B .github/summarize-restart-tests.py .cache/evidence/windows-tests.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -99,8 +102,11 @@ jobs:
           bash .github/ci-command.sh vet go vet -tags 'goolm,no_web' ./...
       - name: Full race tests and CUJ
         run: |
-          bash .github/ci-command.sh tests go test -race -tags 'goolm,no_web' -count=1 -timeout 10m ./...
+          bash .github/ci-command.sh tests go test -json -race -tags 'goolm,no_web' -count=1 -timeout 10m ./...
           bash .github/ci-command.sh cuj go test -race -tags 'goolm,no_web' -count=1 -timeout 5m ./core -run TestCUJ
+      - name: Record Linux skips and results
+        if: always()
+        run: python3 -B .github/summarize-restart-tests.py .cache/verification/tests.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

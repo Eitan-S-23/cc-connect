@@ -10,6 +10,7 @@ on:
     branches:
       - 'feature/relay-live-*'
       - 'codex/official-fixes-model-refresh'
+      - 'codex/windows-restart-upgrade'
     tags:
       - 'fork-v*'
       - 'ci-relay-live-*'
