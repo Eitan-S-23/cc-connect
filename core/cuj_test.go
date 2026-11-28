@@ -1556,7 +1556,7 @@ func TestCUJ_B8_HistoryShowsConversation(t *testing.T) {
 // a fresh session (already covered by TestHandleMessage_AutoResetOnIdle in
 // engine_test.go; we add a thin CUJ-level link).
 func TestCUJ_B10_ResetOnIdle_LinkedToEngineTest(t *testing.T) {
-	t.Log("CUJ-B10: see TestHandleMessage_AutoResetOnIdle_RotatesToNewSession in engine_test.go — full behavior already locked down")
+	t.Log("CUJ-B10: see TestHandleMessage_AutoResetOnIdle_RotatesToNewSession in engine_test.go and TestHandleMessage_QueuedUserMessageRefreshesIdleTimer in idle_reset_queue_test.go — full behavior already locked down")
 }
 
 // CUJ-B11 · Same user in private chat vs group chat: sessions isolated.
@@ -2096,6 +2096,7 @@ func TestCUJ_G4_AgentCrashReturnsErrorAndRecovers(t *testing.T) {
 // reaches the user's screen.
 func TestCUJ_G5_ToolFailureSurfacesToUser(t *testing.T) {
 	env := newCUJEnv(t)
+	defer env.engine.Stop()
 
 	// Establish a session.
 	env.userSends("g5", "hello")
@@ -2129,6 +2130,29 @@ func TestCUJ_G5_ToolFailureSurfacesToUser(t *testing.T) {
 	if !env.sentContains("permission denied") && !env.sentContains("bash tool exited") {
 		t.Fatalf("user did not see the underlying tool error in reply; got: %v", env.plat.getSent())
 	}
+
+	// A failed turn does not stop a persistent agent's background work.
+	// Deliver its result without asking the user to send "continue".
+	env.waitFor("failed foreground turn released", 2*time.Second, func() bool {
+		return !env.activeSession("test:g5").Busy()
+	})
+	sess.events <- Event{Type: EventText, Content: "background task finished"}
+	sess.events <- Event{Type: EventResult, Done: true}
+	env.waitFor("background result after failed turn", 2*time.Second, func() bool {
+		return env.sentContains("background task finished")
+	})
+	if got := len(sess.getSentPrompts()); got != 2 {
+		t.Fatalf("failed prompt was retried: sent %d prompts, want 2", got)
+	}
+
+	// A new user turn must take ownership from the background reader.
+	sess.mu.Lock()
+	sess.reply = "follow-up answer"
+	sess.mu.Unlock()
+	env.userSends("g5", "what happened next?")
+	env.waitFor("follow-up answer after failed turn", 2*time.Second, func() bool {
+		return env.sentContains("follow-up answer") && !env.activeSession("test:g5").Busy()
+	})
 }
 
 // CUJ-G6 · Network flap: undelivered outbound messages eventually arrive
@@ -2834,5 +2858,35 @@ func TestCUJ_AN1_QueuedFailureAndRecoveryMentionsEachSender(t *testing.T) {
 		if got[i].userID != want.user || got[i].replyCtx != want.message || got[i].text != e.i18n.T(want.kind) {
 			t.Fatalf("turn %d notified the wrong user/thread/status: %+v, want %+v", i, got[i], want)
 		}
+	}
+}
+
+// User asks for the list, refreshes it, sees it again, then experiences a
+// provider failure. All responses travel through the platform-facing entrypoint.
+func TestCUJ_M1_ModelRefreshPersistsAndFailureKeepsList(t *testing.T) {
+	e, p, a := newRefreshTestEngine(t)
+	send := func(id, content string) {
+		e.ReceiveMessage(p, &Message{Platform: "plain", SessionKey: "plain:owner", UserID: "owner", MessageID: id, ReplyCtx: "ctx", Content: content})
+	}
+	send("before", "/model")
+	before := len(p.getSent())
+	send("refresh", "/model refresh")
+	if text := strings.Join(p.getSent()[before:], "\n"); !strings.Contains(text, "Fetched and saved 1 models") || !strings.Contains(text, "new-model") {
+		t.Fatal("user did not see refreshed models", text)
+	}
+	e.SetProjectStateStore(NewProjectStateStore(e.projectState.storePath))
+	before = len(p.getSent())
+	send("after-restart", "/model")
+	if text := strings.Join(p.getSent()[before:], "\n"); !strings.Contains(text, "new-model") || !strings.Contains(text, "Current model: gpt-4.1") {
+		t.Fatal("restart lost the catalog or selected model", text)
+	}
+	a.fetch = func(context.Context) ([]ModelOption, error) {
+		return nil, &ModelRefreshError{Reason: "http", Status: 401}
+	}
+	before = len(p.getSent())
+	send("fail", "/model refresh")
+	send("after-failure", "/model")
+	if text := strings.Join(p.getSent()[before:], "\n"); !strings.Contains(text, "HTTP 401") || !strings.Contains(text, "previous list was kept") || !strings.Contains(text, "new-model") {
+		t.Fatal("failure lost the old catalog", text)
 	}
 }

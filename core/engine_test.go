@@ -20,6 +20,15 @@ import (
 
 type stubAgent struct{}
 
+type failingHistoryAgent struct {
+	stubAgent
+	err error
+}
+
+func (a *failingHistoryAgent) GetSessionHistory(context.Context, string, int) ([]HistoryEntry, error) {
+	return []HistoryEntry{{Role: "user", Content: "partial history"}}, a.err
+}
+
 func (a *stubAgent) Name() string { return "stub" }
 func (a *stubAgent) StartSession(_ context.Context, _ string) (AgentSession, error) {
 	return &stubAgentSession{}, nil
@@ -442,11 +451,12 @@ func (p *stubAskQuestionRichCardPlatform) BuildRichCard(status CardStatus, title
 
 type stubModelModeAgent struct {
 	stubAgent
-	model           string
-	mode            string
-	reasoningEffort string
-	providers       []ProviderConfig
-	active          string
+	model            string
+	mode             string
+	reasoningEffort  string
+	reasoningEfforts []string
+	providers        []ProviderConfig
+	active           string
 }
 
 type stubStrictModelAgent struct {
@@ -545,6 +555,9 @@ func (a *stubModelModeAgent) GetReasoningEffort() string {
 }
 
 func (a *stubModelModeAgent) AvailableReasoningEfforts() []string {
+	if len(a.reasoningEfforts) > 0 {
+		return append([]string(nil), a.reasoningEfforts...)
+	}
 	return []string{"low", "medium", "high", "xhigh"}
 }
 
@@ -1019,7 +1032,7 @@ func TestProcessInteractiveEvents_SuppressesDuplicateSideChannelText(t *testing.
 	}
 
 	agentSession.events <- Event{Type: EventResult, Content: sideText, Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil, 0)
 
 	if got := p.getSent(); len(got) != 1 || got[0] != sideText {
 		t.Fatalf("sent text = %#v, want one side-channel message", got)
@@ -1049,7 +1062,7 @@ func TestProcessInteractiveEvents_SuppressesDuplicateSideChannelTextWithContextI
 	}
 
 	agentSession.events <- Event{Type: EventResult, Content: sideText, InputTokens: 52000, Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil, 0)
 
 	if got := p.getSent(); len(got) != 1 || got[0] != sideText {
 		t.Fatalf("sent text = %#v, want only the side-channel message without duplicate ctx reply", got)
@@ -1079,7 +1092,7 @@ func TestProcessInteractiveEvents_DoesNotSuppressDifferentFinalText(t *testing.T
 
 	finalText := "文件已发出，另外我也把使用方法整理好了。"
 	agentSession.events <- Event{Type: EventResult, Content: finalText, Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil, 0)
 
 	if got := p.getSent(); len(got) != 2 || got[0] == got[1] {
 		t.Fatalf("sent text = %#v, want side-channel and final reply", got)
@@ -1113,7 +1126,7 @@ func TestProcessInteractiveEvents_StripsAgentFooterWhenEnabled(t *testing.T) {
 
 	agentSession.events <- Event{Type: EventText, Content: "answer\n\n*claude-opus-4-8[1m] · out 788 · in 442 cw 0 cr 395.1k · ctx 40%*"}
 	agentSession.events <- Event{Type: EventResult, Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-agent-footer", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-agent-footer", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1144,7 +1157,7 @@ func TestProcessInteractiveEvents_KeepsAgentFooterByDefault(t *testing.T) {
 	body := "answer\n\n*claude-opus-4-8[1m] · out 788 · in 442 cw 0 cr 395.1k · ctx 40%*"
 	agentSession.events <- Event{Type: EventText, Content: body}
 	agentSession.events <- Event{Type: EventResult, Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-agent-footer-default", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-agent-footer-default", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1212,7 +1225,7 @@ func TestProcessInteractiveEvents_NonTerminalResultContinuesTurn(t *testing.T) {
 		Done:    true,
 	}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil, 0)
 
 	// noteUserTurnCompleted must have been called exactly once on the
 	// terminal result, advancing the watermark to the in-flight message time.
@@ -1280,7 +1293,7 @@ func TestProcessInteractiveEvents_AppendsReplyFooterWhenEnabled(t *testing.T) {
 	e.interactiveStates[sessionKey] = state
 
 	agentSession.events <- Event{Type: EventResult, Content: "answer", Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1318,7 +1331,7 @@ func TestProcessInteractiveEvents_AppendsContextIndicatorInsideReplyFooter(t *te
 	e.interactiveStates[sessionKey] = state
 
 	agentSession.events <- Event{Type: EventResult, Content: "answer", InputTokens: 28000, Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-context", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-context", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1360,7 +1373,7 @@ func TestProcessInteractiveEvents_ToolSegmentsKeepFinalFooter(t *testing.T) {
 	agentSession.events <- Event{Type: EventToolUse, ToolName: "Bash", ToolInput: "pwd"}
 	agentSession.events <- Event{Type: EventText, Content: "已处理完成。"}
 	agentSession.events <- Event{Type: EventResult, Content: "已处理完成。", InputTokens: 28000, Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-tool-footer", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-tool-footer", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) == 0 {
@@ -1391,7 +1404,7 @@ func TestProcessInteractiveEvents_DropsStandaloneEllipsisProgress(t *testing.T) 
 	agentSession.events <- Event{Type: EventThinking, Content: "..."}
 	agentSession.events <- Event{Type: EventText, Content: "..."}
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-ellipsis", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-ellipsis", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 || sent[0] != "done" {
@@ -1414,7 +1427,7 @@ func TestProcessInteractiveEvents_AddsDoneReactionAfterNormalReply(t *testing.T)
 	e.interactiveStates[sessionKey] = state
 
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-done", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-done", time.Now(), nil, nil, state.replyCtx, 0)
 
 	count, ctxs := p.doneSnapshot()
 	if count != 1 {
@@ -1461,7 +1474,7 @@ func TestProcessInteractiveEvents_DoesNotAppendReplyFooterWhenDisabled(t *testin
 	e.interactiveStates[sessionKey] = state
 
 	agentSession.events <- Event{Type: EventResult, Content: "answer", Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-off", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-off", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1533,7 +1546,7 @@ func TestProcessInteractiveEvents_ReplyFooterPrefersSessionRuntimeState(t *testi
 	e.interactiveStates[sessionKey] = state
 
 	agentSession.events <- Event{Type: EventResult, Content: "answer", Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-runtime", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-runtime", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1570,7 +1583,7 @@ func TestProcessInteractiveEvents_SuppressesReplyFooterWhenOnlyWorkDir(t *testin
 	e.interactiveStates[sessionKey] = state
 
 	agentSession.events <- Event{Type: EventResult, Content: "answer", Done: true}
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-workdir-only", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-footer-workdir-only", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1600,7 +1613,7 @@ func TestProcessInteractiveEvents_HiddenToolProgressKeepsPreviewOnFinalize(t *te
 	agentSession.events <- Event{Type: EventToolUse, ToolName: "Bash", ToolInput: "echo hi"}
 	agentSession.events <- Event{Type: EventResult, Content: "", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil, 0)
 
 	if got := p.getSent(); len(got) != 0 {
 		t.Fatalf("sent text = %#v, want no plain-text fallback sends", got)
@@ -1639,7 +1652,7 @@ func TestProcessInteractiveEvents_ToolMessagesDisabledSuppressesToolProgressOnly
 	agentSession.events <- Event{Type: EventText, Content: "done"}
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, nil, 0)
 
 	sent := p.getSent()
 	if len(sent) < 1 || len(sent) > 2 {
@@ -1676,7 +1689,7 @@ func TestProcessInteractiveEvents_CompactProgressCoalescesThinkingAndToolUse(t *
 	agentSession.events <- Event{Type: EventText, Content: "done"}
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m1", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 || sent[0] != "done" {
@@ -1721,7 +1734,7 @@ func TestProcessInteractiveEvents_CardProgressUsesCardTemplate(t *testing.T) {
 	agentSession.events <- Event{Type: EventText, Content: "done"}
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m2", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m2", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 || sent[0] != "done" {
@@ -1783,7 +1796,7 @@ func TestProcessInteractiveEvents_FinalReplyUsesWorkspaceForReferenceRendering(t
 		Done:    true,
 	}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-relative", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-relative", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1824,7 +1837,7 @@ func TestProcessInteractiveEvents_FinalReplyRemainsRawWhenReferencesDisabled(t *
 		Done:    true,
 	}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-relative-raw", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-relative-raw", time.Now(), nil, nil, state.replyCtx, 0)
 
 	sent := p.getSent()
 	if len(sent) != 1 {
@@ -1857,7 +1870,7 @@ func TestProcessInteractiveEvents_CardProgressUsesStructuredPayloadWhenSupported
 	agentSession.events <- Event{Type: EventText, Content: "done"}
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m3", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m3", time.Now(), nil, nil, state.replyCtx, 0)
 
 	starts := p.getPreviewStarts()
 	if len(starts) != 1 {
@@ -1939,7 +1952,7 @@ func TestProcessInteractiveEvents_CardProgressTruncatesToolInputByToolMaxLen(t *
 	agentSession.events <- Event{Type: EventText, Content: "done"}
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-card-truncate", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-card-truncate", time.Now(), nil, nil, state.replyCtx, 0)
 
 	if toolEvt.ToolInput != longInput {
 		t.Fatalf("event.ToolInput was mutated: got len=%d, want len=%d", len(toolEvt.ToolInput), len(longInput))
@@ -2001,7 +2014,7 @@ func TestProcessInteractiveEvents_RichCardShowsThinkingContent(t *testing.T) {
 	agentSession.events <- Event{Type: EventText, Content: "answer"}
 	agentSession.events <- Event{Type: EventResult, Content: "answer", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-thinking", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-thinking", time.Now(), nil, nil, state.replyCtx, 0)
 
 	starts := p.getPreviewStarts()
 	if len(starts) != 1 {
@@ -2044,7 +2057,7 @@ func TestProcessInteractiveEvents_RichCardCoalescesToolResult(t *testing.T) {
 	agentSession.events <- Event{Type: EventText, Content: "done"}
 	agentSession.events <- Event{Type: EventResult, Content: "done", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-tool-result", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-tool-result", time.Now(), nil, nil, state.replyCtx, 0)
 
 	starts := p.getPreviewStarts()
 	if len(starts) != 1 {
@@ -2165,7 +2178,7 @@ func TestProcessInteractiveEvents_RichCardResolvesMarkdownImages(t *testing.T) {
 	agentSession.events <- Event{Type: EventText, Content: body}
 	agentSession.events <- Event{Type: EventResult, Content: body, Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-image-resolver", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-image-resolver", time.Now(), nil, nil, state.replyCtx, 0)
 	_, streams, updates, _ := p.snapshot()
 	rendered := strings.Join(append(streams, updates...), "\n")
 	if !strings.Contains(rendered, "![chart](img_v3_chart)") {
@@ -2225,7 +2238,7 @@ func runRichCardSilentScenario(t *testing.T, name string, chunks []string, final
 	}
 	agentSession.events <- Event{Type: EventResult, Content: finalContent, Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-silent-"+name, time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-silent-"+name, time.Now(), nil, nil, state.replyCtx, 0)
 	return p.snapshot()
 }
 
@@ -2321,7 +2334,7 @@ func TestProcessInteractiveEvents_RichCard_TextThenNoReply_PreservesBody(t *test
 	agentSession.events <- Event{Type: EventText, Content: "\nNO_REPLY"}
 	agentSession.events <- Event{Type: EventResult, Content: "NO_REPLY", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-text-then-noreply", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-text-then-noreply", time.Now(), nil, nil, state.replyCtx, 0)
 	starts, _, updates, deletes := p.snapshot()
 
 	if len(starts) == 0 {
@@ -2381,7 +2394,7 @@ func TestProcessInteractiveEvents_RichCard_ToolThenNoReply(t *testing.T) {
 	agentSession.events <- Event{Type: EventText, Content: "NO_REPLY"}
 	agentSession.events <- Event{Type: EventResult, Content: "NO_REPLY", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-tool-then-noreply", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-rich-tool-then-noreply", time.Now(), nil, nil, state.replyCtx, 0)
 	starts, streams, updates, deletes := p.snapshot()
 
 	if len(starts) == 0 {
@@ -3574,7 +3587,7 @@ func TestHandleMessage_AutoResetOnIdle_FiresWhenHeartbeatBumpedUpdatedAt(t *test
 	// Simulate a heartbeat (or unsolicited agent response) finishing right
 	// before this test's user message: Unlock() bumps UpdatedAt to now, but
 	// LastUserActivity is intentionally NOT touched by those code paths.
-	old.Unlock()
+	old.Unlock(0)
 
 	if !old.GetUpdatedAt().After(staleAt) {
 		t.Fatalf("expected Unlock to bump UpdatedAt, got %v vs %v", old.GetUpdatedAt(), staleAt)
@@ -3823,6 +3836,33 @@ func TestCmdCurrent_UsesLegacyTextOnPlatformWithoutCardSupport(t *testing.T) {
 	}
 	if strings.Contains(p.sent[0], "cc-connect") {
 		t.Fatalf("current text = %q, should not be card fallback title", p.sent[0])
+	}
+}
+
+func TestCmdHistory_ReadFailureIsVisibleWithoutLeakingPath(t *testing.T) {
+	const secretPath = "/private/codex-home/sessions/secret.jsonl"
+	agent := &failingHistoryAgent{err: fmt.Errorf("scan %s: token too long", secretPath)}
+	msg := &Message{SessionKey: "test:history-failure", ReplyCtx: "ctx"}
+
+	plain := &stubPlatformEngine{n: "plain"}
+	textEngine := NewEngine("test", agent, []Platform{plain}, "", LangEnglish)
+	textEngine.sessions.GetOrCreateActive(msg.SessionKey).SetAgentSessionID("broken", "test")
+	textEngine.cmdHistory(plain, msg, []string{"10"})
+	sent := plain.getSent()
+	if len(sent) != 1 || sent[0] != textEngine.i18n.T(MsgHistoryReadFailed) || strings.Contains(sent[0], secretPath) {
+		t.Fatalf("text history response = %q; want generic localized failure without path", sent)
+	}
+
+	cardPlatform := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "cards"}}
+	cardEngine := NewEngine("test", agent, []Platform{cardPlatform}, "", LangEnglish)
+	cardEngine.sessions.GetOrCreateActive(msg.SessionKey).SetAgentSessionID("broken", "test")
+	cardEngine.cmdHistory(cardPlatform, msg, nil)
+	if len(cardPlatform.repliedCards) != 1 {
+		t.Fatalf("card replies = %d, want 1", len(cardPlatform.repliedCards))
+	}
+	cardText := cardPlatform.repliedCards[0].RenderText()
+	if !strings.Contains(cardText, cardEngine.i18n.T(MsgHistoryReadFailed)) || strings.Contains(cardText, secretPath) || strings.Contains(cardText, "partial history") {
+		t.Fatalf("card history response = %q; want generic localized failure without path or partial history", cardText)
 	}
 }
 
@@ -4516,8 +4556,8 @@ func TestCmdModel_UsesInlineButtonsOnButtonOnlyPlatform(t *testing.T) {
 	if len(p.buttonRows) == 0 {
 		t.Fatal("expected /model to send inline buttons on button-only platform")
 	}
-	if got := p.buttonRows[0][0].Data; got != "cmd:/model switch 1" {
-		t.Fatalf("first /model button = %q, want %q", got, "cmd:/model switch 1")
+	if got := p.buttonRows[0][0].Data; got != "cmd:/model switch gpt-4.1" {
+		t.Fatalf("first /model button = %q, want %q", got, "cmd:/model switch gpt-4.1")
 	}
 }
 
@@ -5462,6 +5502,48 @@ func TestCmdReasoning_UsesInlineButtonsOnButtonOnlyPlatform(t *testing.T) {
 	if got := p.buttonRows[0][0].Text; got != "low" {
 		t.Fatalf("first /reasoning button text = %q, want low", got)
 	}
+}
+
+func TestCmdReasoning_UsageListsAgentEfforts(t *testing.T) {
+	efforts := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+	wantUsage := "Usage: `/reasoning <number>` or `/reasoning <" + strings.Join(efforts, "|") + ">`"
+
+	t.Run("list", func(t *testing.T) {
+		p := &stubPlatformEngine{n: "plain"}
+		agent := &stubModelModeAgent{reasoningEfforts: efforts}
+		e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+		e.cmdReasoning(p, &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}, nil)
+
+		if len(p.sent) != 1 || !strings.Contains(p.sent[0], wantUsage) {
+			t.Fatalf("sent = %v, want dynamic usage %q", p.sent, wantUsage)
+		}
+	})
+
+	t.Run("invalid value", func(t *testing.T) {
+		p := &stubPlatformEngine{n: "plain"}
+		agent := &stubModelModeAgent{reasoningEfforts: efforts}
+		e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+		e.cmdReasoning(p, &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}, []string{"invalid"})
+
+		if len(p.sent) != 1 || !strings.Contains(p.sent[0], wantUsage) {
+			t.Fatalf("sent = %v, want dynamic usage %q", p.sent, wantUsage)
+		}
+	})
+
+	t.Run("card note", func(t *testing.T) {
+		agent := &stubModelModeAgent{reasoningEfforts: efforts}
+		e := NewEngine("test", agent, nil, "", LangEnglish)
+		card := e.renderReasoningCard(e.agent)
+
+		for _, element := range card.Elements {
+			if note, ok := element.(CardNote); ok && note.Text == wantUsage {
+				return
+			}
+		}
+		t.Fatalf("card elements = %#v, want dynamic usage note %q", card.Elements, wantUsage)
+	})
 }
 
 func TestCmdReasoning_SwitchesEffortAndResetsSession(t *testing.T) {
@@ -6703,7 +6785,7 @@ func TestProcessInteractiveEvents_AskUserQuestionFromAgent_RendersRichCardPrompt
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "m-codex-ask-card", time.Now(), nil, sendDone, nil)
+		e.processInteractiveEvents(state, session, e.sessions, key, "m-codex-ask-card", time.Now(), nil, sendDone, nil, 0)
 		close(done)
 	}()
 
@@ -6772,7 +6854,7 @@ func TestProcessInteractiveEvents_AskUserQuestionFromAgent_RendersLegacyPrompt(t
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "m-codex-ask-legacy", time.Now(), nil, sendDone, nil)
+		e.processInteractiveEvents(state, session, e.sessions, key, "m-codex-ask-legacy", time.Now(), nil, sendDone, nil, 0)
 		close(done)
 	}()
 
@@ -7535,7 +7617,7 @@ func TestProcessInteractiveMessage_SchedulesAgentSessionIdleCloseAfterCleanTurn(
 		UserName:   "User One",
 		Content:    "hello",
 		ReplyCtx:   "ctx",
-	}, session, agent, e.sessions, "test:chat:user1", "", "")
+	}, session, agent, e.sessions, "test:chat:user1", "", "", 0)
 
 	waitForAgentSessionID(t, session, "result-session")
 	waitForInteractiveStateRemoved(t, e, "test:chat:user1")
@@ -8728,7 +8810,7 @@ func TestProcessInteractiveEvents_PermissionWhileSendBlocked(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "m1", time.Now(), nil, sendDone, nil)
+		e.processInteractiveEvents(state, session, e.sessions, key, "m1", time.Now(), nil, sendDone, nil, 0)
 		close(done)
 	}()
 
@@ -8775,7 +8857,7 @@ func TestReapIdleWorkspaces_SkipsWorkspaceWithActiveTurn(t *testing.T) {
 	workspaceDir := normalizeWorkspacePath(t.TempDir())
 	sessionKey := "test:user1"
 	session := e.sessions.GetOrCreateActive(sessionKey)
-	if !session.TryLock() {
+	if _, lockedNow := session.TryLock(); !lockedNow {
 		t.Fatal("expected session lock")
 	}
 
@@ -8786,7 +8868,7 @@ func TestReapIdleWorkspaces_SkipsWorkspaceWithActiveTurn(t *testing.T) {
 			UserID:     "user1",
 			Content:    "long running task",
 			ReplyCtx:   "ctx",
-		}, session, e.agent, e.sessions, sessionKey, workspaceDir, sessionKey)
+		}, session, e.agent, e.sessions, sessionKey, workspaceDir, sessionKey, 0)
 		close(done)
 	}()
 
@@ -8828,7 +8910,7 @@ func TestReapIdleWorkspaces_SkipsWorkspaceWaitingForPermission(t *testing.T) {
 	workspaceDir := normalizeWorkspacePath(t.TempDir())
 	sessionKey := "test:user2"
 	session := e.sessions.GetOrCreateActive(sessionKey)
-	if !session.TryLock() {
+	if _, lockedNow := session.TryLock(); !lockedNow {
 		t.Fatal("expected session lock")
 	}
 
@@ -8839,7 +8921,7 @@ func TestReapIdleWorkspaces_SkipsWorkspaceWaitingForPermission(t *testing.T) {
 			UserID:     "user2",
 			Content:    "needs approval",
 			ReplyCtx:   "ctx",
-		}, session, e.agent, e.sessions, sessionKey, workspaceDir, sessionKey)
+		}, session, e.agent, e.sessions, sessionKey, workspaceDir, sessionKey, 0)
 		close(done)
 	}()
 
@@ -9025,7 +9107,7 @@ func TestProcessInteractiveEvents_DrainsQueuedMessages(t *testing.T) {
 	// processInteractiveEvents should handle both turns.
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), nil, sendDone, nil)
+		e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), nil, sendDone, nil, 0)
 		close(done)
 	}()
 
@@ -9120,7 +9202,7 @@ func TestProcessInteractiveEvents_DrainsQueuedMessagesFIFOWithCreateTimes(t *tes
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "msg0", time.Now(), nil, sendDone, "ctx-turn1")
+		e.processInteractiveEvents(state, session, e.sessions, key, "msg0", time.Now(), nil, sendDone, "ctx-turn1", 0)
 		close(done)
 	}()
 
@@ -9224,7 +9306,7 @@ func TestProcessInteractiveEvents_QueuedMessageUsesItsOwnReplyCtx(t *testing.T) 
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), nil, sendDone, "ctx-turn1")
+		e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), nil, sendDone, "ctx-turn1", 0)
 		close(done)
 	}()
 
@@ -9425,7 +9507,7 @@ func TestDrainOrphanedQueue_UsesWorkspaceSessionManager(t *testing.T) {
 
 	key := "ws1:test:user1"
 	session := wsSessions.GetOrCreateActive("test:user1")
-	if !session.TryLock() {
+	if _, lockedNow := session.TryLock(); !lockedNow {
 		t.Fatal("expected TryLock to succeed")
 	}
 
@@ -9456,7 +9538,7 @@ func TestDrainOrphanedQueue_UsesWorkspaceSessionManager(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		e.drainOrphanedQueue(session, wsSessions, key, agent, "")
+		e.drainOrphanedQueue(session, wsSessions, key, agent, "", 0)
 		close(done)
 	}()
 
@@ -9662,6 +9744,48 @@ func TestExecuteCardAction_ModeCleansUpWithInteractiveKey(t *testing.T) {
 	}
 }
 
+// Regression: the /list card button reaches executeCardAction, which cleared the
+// session history after switching. cmdSwitch never did, and documents why —
+// SwitchToAgentSession returns the existing Session when the agent session ID is
+// known, so wiping History makes /status and /history report zero messages right
+// after a switch that succeeded. Typing "/switch 1" kept its history; tapping the
+// same session in the card did not.
+func TestExecuteCardAction_SwitchPreservesHistory(t *testing.T) {
+	p := &stubCardPlatform{stubPlatformEngine: stubPlatformEngine{n: "feishu"}}
+	agent := &stubListAgent{sessions: []AgentSessionInfo{
+		{ID: "sess-a1", Summary: "a1"},
+		{ID: "sess-a2", Summary: "a2"},
+	}}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	sessionKey := "feishu:channel1:user1"
+	sessions := e.sessions
+
+	// A session with recorded history, then a second session that became active —
+	// the state a /list card switch encounters.
+	first := sessions.GetOrCreateActive(sessionKey)
+	first.SetAgentSessionID("sess-a1", "stub")
+	first.AddHistory("user", "A1 first message")
+	first.AddHistory("assistant", "A1 reply")
+	sessions.Save()
+
+	sessions.NewSession(sessionKey, "a2")
+	sessions.GetOrCreateActive(sessionKey).SetAgentSessionID("sess-a2", "stub")
+	sessions.Save()
+
+	// "act:/switch 1" is what a /list card row sends.
+	_ = e.handleCardNav("act:/switch 1", sessionKey)
+
+	active := sessions.GetOrCreateActive(sessionKey)
+	if active.GetAgentSessionID() != "sess-a1" {
+		t.Fatalf("active session after card /switch = %q, want sess-a1", active.GetAgentSessionID())
+	}
+	hist := active.GetHistory(10)
+	if len(hist) == 0 || !strings.Contains(hist[0].Content, "A1") {
+		t.Fatalf("history after card /switch = %v, want the A1 conversation preserved", hist)
+	}
+}
+
 // ===========================================================================
 // P0 Beta release tests
 // ===========================================================================
@@ -9812,7 +9936,7 @@ func TestProcessInteractiveMessageWith_NilAgentSession_NoPanic(t *testing.T) {
 
 	sessionKey := "test:user-nil-after-abandon"
 	session := e.sessions.GetOrCreateActive(sessionKey)
-	if !session.TryLock() {
+	if _, lockedNow := session.TryLock(); !lockedNow {
 		t.Fatal("expected session lock")
 	}
 
@@ -9833,7 +9957,7 @@ func TestProcessInteractiveMessageWith_NilAgentSession_NoPanic(t *testing.T) {
 			UserID:     "user-nil",
 			Content:    "trigger nil guard",
 			ReplyCtx:   "ctx-nil",
-		}, session, e.agent, e.sessions, sessionKey, "", sessionKey)
+		}, session, e.agent, e.sessions, sessionKey, "", sessionKey, 0)
 	}()
 
 	select {
@@ -9929,7 +10053,7 @@ func TestAutoCompress_TriggerAfterResult(t *testing.T) {
 	session.AddHistory("user", "hello world")
 
 	// Simulate a full turn.
-	go e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), func() {}, nil, nil)
+	go e.processInteractiveEvents(state, session, e.sessions, key, "msg1", time.Now(), func() {}, nil, nil, 0)
 
 	sess.events <- Event{Type: EventResult, Content: "response", Done: true}
 
@@ -9976,7 +10100,7 @@ func TestCmdCompress_SessionBusy_RepliesPreviousProcessing(t *testing.T) {
 
 	// Lock the session to simulate busy.
 	session := e.sessions.GetOrCreateActive(key)
-	if !session.TryLock() {
+	if _, lockedNow := session.TryLock(); !lockedNow {
 		t.Fatal("expected TryLock to succeed")
 	}
 
@@ -9994,7 +10118,7 @@ func TestCmdCompress_SessionBusy_RepliesPreviousProcessing(t *testing.T) {
 	if !found {
 		t.Fatalf("expected MsgPreviousProcessing reply, got %v", sent)
 	}
-	session.Unlock()
+	session.Unlock(0)
 }
 
 func TestCmdCompress_Success_SendsCompressDone(t *testing.T) {
@@ -10249,10 +10373,10 @@ func TestCmdPs_BusySession_InjectsToAgent(t *testing.T) {
 
 	// Simulate a turn in flight.
 	session := e.sessions.GetOrCreateActive(key)
-	if !session.TryLock() {
+	if _, lockedNow := session.TryLock(); !lockedNow {
 		t.Fatal("expected TryLock to succeed")
 	}
-	defer session.Unlock()
+	defer session.Unlock(0)
 
 	msg := &Message{SessionKey: key, Content: "/ps add unit tests", ReplyCtx: "ctx"}
 	e.cmdPs(p, msg, []string{"add", "unit", "tests"})
@@ -10446,7 +10570,7 @@ func TestCmdStop_ReturnsWhileCloseBlockedAndStopsEventLoop(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "msg-1", time.Now(), nil, nil, "ctx")
+		e.processInteractiveEvents(state, session, e.sessions, key, "msg-1", time.Now(), nil, nil, "ctx", 0)
 		close(done)
 	}()
 
@@ -10670,7 +10794,7 @@ func TestHandleMessageBusyRecalledCurrentStopsAndProcessesNewMessage(t *testing.
 	e := NewEngine("test", &resultAgent{session: newAgentSession}, []Platform{p}, "", LangEnglish)
 	key := "test:user1"
 	session := e.sessions.GetOrCreateActive(key)
-	if !session.TryLock() {
+	if _, lockedNow := session.TryLock(); !lockedNow {
 		t.Fatal("expected to lock session for busy setup")
 	}
 
@@ -10687,7 +10811,7 @@ func TestHandleMessageBusyRecalledCurrentStopsAndProcessesNewMessage(t *testing.
 	oldStopped := oldState.stopSignal()
 	go func() {
 		<-oldStopped
-		session.Unlock()
+		session.Unlock(0)
 	}()
 
 	e.ReceiveMessage(p, &Message{
@@ -11067,7 +11191,7 @@ func TestEventIdleTimeout_CleansUpSession(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "", time.Now(), nil, nil, nil)
+		e.processInteractiveEvents(state, session, e.sessions, key, "", time.Now(), nil, nil, nil, 0)
 		close(done)
 	}()
 
@@ -11111,7 +11235,7 @@ func TestEventIdleTimeout_ResetOnEvent(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "", time.Now(), nil, nil, nil)
+		e.processInteractiveEvents(state, session, e.sessions, key, "", time.Now(), nil, nil, nil, 0)
 		close(done)
 	}()
 
@@ -11163,7 +11287,7 @@ func TestEventIdleTimeout_DisabledWhenZero(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		e.processInteractiveEvents(state, session, e.sessions, key, "", time.Now(), nil, nil, nil)
+		e.processInteractiveEvents(state, session, e.sessions, key, "", time.Now(), nil, nil, nil, 0)
 		close(done)
 	}()
 
@@ -14255,11 +14379,11 @@ func TestUnsolicitedReader_SetsResyncOnChannelClose(t *testing.T) {
 	}
 }
 
-// TestUnsolicitedReader_SetsResyncOnEventError verifies that EventError
-// sets eventsNeedResync to true and relays the error.
-func TestUnsolicitedReader_SetsResyncOnEventError(t *testing.T) {
+// A dead session cannot produce further background work after an error.
+func TestUnsolicitedReader_SetsResyncOnDeadSessionError(t *testing.T) {
 	p := &stubPlatformEngine{n: "test"}
 	sess := newControllableSession("unsol-error")
+	sess.alive = false
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
 	defer e.Stop()
 
@@ -14306,6 +14430,48 @@ func TestUnsolicitedReader_SetsResyncOnEventError(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected error to be relayed to platform, got %v", sent)
+	}
+}
+
+func TestUnsolicitedReader_KeepsLiveSessionAfterTurnError(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	sess := newControllableSession("unsol-live-error")
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+	defer e.Stop()
+	const key = "test:live-error:u1"
+	session := e.sessions.GetOrCreateActive(key)
+	state := &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.startUnsolicitedReader(state, session, e.sessions, key, "")
+	defer e.stopUnsolicitedReader(state)
+
+	// Preserve text from each failed background turn and keep accepting
+	// subsequent results; neither error is a process-exit notification.
+	for _, text := range []string{"first partial answer", "second partial answer"} {
+		sess.events <- Event{Type: EventText, Content: text}
+		sess.events <- Event{Type: EventError, Error: errors.New("turn was refused")}
+	}
+	sess.events <- Event{Type: EventText, Content: "later background answer"}
+	sess.events <- Event{Type: EventResult, Done: true}
+
+	sent := waitForPlatformSend(p, 5, 2*time.Second)
+	if len(sent) != 5 {
+		t.Fatalf("expected two partial answers, two errors and a later answer; got %v", sent)
+	}
+	e.stopUnsolicitedReader(state)
+	for i, want := range []string{"first partial answer", "turn was refused", "second partial answer", "turn was refused", "later background answer"} {
+		if !strings.Contains(sent[i], want) {
+			t.Errorf("reply %d = %q, want %q", i, sent[i], want)
+		}
+	}
+	history := session.GetHistory(0)
+	if len(history) != 3 {
+		t.Fatalf("history lost background answers: %+v", history)
+	}
+	state.mu.Lock()
+	resync := state.eventsNeedResync
+	state.mu.Unlock()
+	if resync {
+		t.Error("live session should preserve its event stream after a turn error")
 	}
 }
 
@@ -14438,7 +14604,7 @@ func TestEventsNeedResync_ClearedOnCleanResult(t *testing.T) {
 
 	sendDone := make(chan error, 1)
 	sendDone <- nil
-	e.processInteractiveEvents(state, session, sessions, "test:resync:u1", "", time.Now(), nil, sendDone, "ctx")
+	e.processInteractiveEvents(state, session, sessions, "test:resync:u1", "", time.Now(), nil, sendDone, "ctx", 0)
 
 	state.mu.Lock()
 	resync := state.eventsNeedResync
@@ -15571,7 +15737,7 @@ func TestMaybeAutoResetSessionOnIdle_UsesLastUserActivity(t *testing.T) {
 	p := &stubPlatformEngine{n: "test"}
 	msg := &Message{SessionKey: "sk", ReplyCtx: "ctx"}
 
-	rotated := e.maybeAutoResetSessionOnIdle(p, msg, sm, "ws:sk", session)
+	rotated, _ := e.maybeAutoResetSessionOnIdle(p, msg, sm, "ws:sk", session, 0)
 	if rotated == nil {
 		t.Fatal("expected idle reset to fire because LastUserActivity is 35min ago, but it did not")
 	}
@@ -15597,7 +15763,7 @@ func TestMaybeAutoResetSessionOnIdle_NotFiredWhenUserActivityRecent(t *testing.T
 	p := &stubPlatformEngine{n: "test"}
 	msg := &Message{SessionKey: "sk2", ReplyCtx: "ctx"}
 
-	rotated := e.maybeAutoResetSessionOnIdle(p, msg, sm, "ws:sk2", session)
+	rotated, _ := e.maybeAutoResetSessionOnIdle(p, msg, sm, "ws:sk2", session, 0)
 	if rotated != nil {
 		t.Fatal("expected no idle reset because LastUserActivity is only 5min ago")
 	}
@@ -16188,7 +16354,7 @@ func TestProcessInteractiveEvents_StreamingCard_BareNoReply_Suppressed(t *testin
 	agentSession.events <- Event{Type: EventText, Content: "NO_REPLY"}
 	agentSession.events <- Event{Type: EventResult, Content: "NO_REPLY", Done: true}
 
-	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-streamcard-bare-noreply", time.Now(), nil, nil, state.replyCtx)
+	e.processInteractiveEvents(state, session, e.sessions, sessionKey, "m-streamcard-bare-noreply", time.Now(), nil, nil, state.replyCtx, 0)
 
 	if !card.finalized() {
 		t.Fatalf("expected streaming card to be finalized on a silent turn")

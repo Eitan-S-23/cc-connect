@@ -10,6 +10,7 @@ import (
 )
 
 type projectStateData struct {
+	RefreshedModels         map[string]refreshedModelCatalog       `json:"refreshed_models,omitempty"`
 	RememberedModels        map[string][]string                    `json:"remembered_models,omitempty"`
 	AutoRetryEnabled        bool                                   `json:"auto_retry_enabled,omitempty"`
 	NotifyEnabled           *bool                                  `json:"notify_enabled,omitempty"`

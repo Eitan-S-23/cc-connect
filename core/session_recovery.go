@@ -61,7 +61,7 @@ func (sm *SessionManager) newRecoverySession(key string, active *Session, active
 	s.RecoveryContext = text
 	s.ActiveProvider = target.Provider
 	s.markExplicitlyActivatedLocked()
-	s.busy = true
+	_, _ = s.TryLock()
 	sm.saveLocked()
 	return s
 }
@@ -86,12 +86,12 @@ func (e *Engine) sendSessionRecoveryOffer(p Platform, replyCtx any, agent Agent,
 // matchRecoveryTarget resolves a /recover argument (list number, ID prefix or
 // name) against the same filtered list /list renders, so indices stay in sync
 // with what the user clicked.
-func (e *Engine) matchRecoveryTarget(agent Agent, sessions *SessionManager, query string) (*AgentSessionInfo, error) {
+func (e *Engine) matchRecoveryTarget(agent Agent, sessions *SessionManager, sessionKey, query string) (*AgentSessionInfo, error) {
 	agentSessions, err := e.listAgentSessions(agent)
 	if err != nil {
 		return nil, err
 	}
-	agentSessions = e.applySessionFilter(agentSessions, sessions)
+	agentSessions = e.applySessionFilter(agentSessions, sessions, sessionKey)
 	return e.matchSession(agentSessions, sessions, query), nil
 }
 
@@ -111,7 +111,7 @@ func (e *Engine) cmdRecover(p Platform, msg *Message, args []string) {
 	activeID := active.GetAgentSessionID()
 	target := recoveryTarget{ID: activeID, Name: active.GetName(), Provider: active.GetActiveProvider()}
 	if query := strings.TrimSpace(strings.Join(args, " ")); query != "" && query != activeID {
-		matched, err := e.matchRecoveryTarget(agent, sessions, query)
+		matched, err := e.matchRecoveryTarget(agent, sessions, msg.SessionKey, query)
 		if err != nil {
 			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgError, err))
 			return
@@ -139,11 +139,12 @@ func (e *Engine) cmdRecover(p Platform, msg *Message, args []string) {
 	}
 
 	// 锁住当前活跃会话：恢复会替换活跃选择，不能让正在跑的一轮被顶掉。
-	if !active.TryLock() {
+	activeGen, locked := active.TryLock()
+	if !locked {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
 		return
 	}
-	defer active.UnlockWithoutUpdate()
+	defer active.UnlockWithoutUpdate(activeGen)
 	e.interactiveMu.Lock()
 	previous := e.interactiveStates[key]
 	e.interactiveMu.Unlock()
@@ -172,7 +173,10 @@ func (e *Engine) cmdRecover(p Platform, msg *Message, args []string) {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRecoveryStale))
 		return
 	}
-	defer replacement.UnlockWithoutUpdate()
+	replacement.mu.Lock()
+	replacementGen := replacement.lockGen
+	replacement.mu.Unlock()
+	defer replacement.UnlockWithoutUpdate(replacementGen)
 	if previous != nil {
 		e.cleanupInteractiveState(key, previous)
 	}
@@ -223,7 +227,7 @@ func (e *Engine) renderRecoveryModeCard(sessionKey string, page int) (*Card, err
 	if err != nil {
 		return nil, fmt.Errorf(e.i18n.T(MsgListError), err)
 	}
-	agentSessions = e.applySessionFilter(agentSessions, sessions)
+	agentSessions = e.applySessionFilter(agentSessions, sessions, sessionKey)
 	if len(agentSessions) == 0 {
 		return e.simpleCard(e.i18n.Tf(MsgRecoveryModeTitle, agent.Name(), 0), "orange", e.i18n.T(MsgListEmpty)), nil
 	}

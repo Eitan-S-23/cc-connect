@@ -66,6 +66,8 @@ cc-connect 完整功能使用指南。
 
 下一条消息会携带恢复上下文。点击按钮时不调用模型、不重跑失败任务，因此「准备完成」不代表已验证连通性。待发送上下文支持重启和首次请求失败后保留，成功完成一轮且获得后端会话 ID 后才清除待发送副本。总大小限制为 128 KiB、单条 16 KiB，优先保留初始需求和近期上下文；截断或历史压缩会明确提示。中转仍可能再次报错；缺失或无法读取历史时不切换当前会话。
 
+Codex `/ps` 中途引导要求 app-server 支持 `turn/steer`（codex-cli 0.166.0 或更新版本）。旧版 CLI 会返回方法不支持错误；使用此功能前请升级 Codex CLI。
+
 也可以为项目开启“空闲后自动切换新会话”：
 
 ```toml
@@ -98,12 +100,62 @@ reset_on_idle_mins = 60
 
 ### Codex 模式
 
-| 模式 | 配置值 | 行为 |
-|------|--------|------|
-| 建议 | `suggest` | 仅受信命令自动执行 |
-| 自动编辑 | `auto-edit` | 模型自行决定 |
-| 全自动 | `full-auto` | 自动通过 + 沙箱保护 |
-| YOLO | `yolo` | 跳过所有审批 |
+| 模式 | 配置值 | `exec`（默认后端） | `app_server` |
+|------|--------|-------------------|--------------|
+| 建议 | `suggest` | 只读，无交互审批 | 只读，按需请求审批 |
+| 自动编辑 | `auto-edit` | 工作区可写，无审批 | 工作区可写，无审批 |
+| 全自动 | `full-auto` | 工作区可写，无审批 | 工作区可写，无审批 |
+| YOLO | `yolo` | 跳过审批与沙箱 | 跳过审批与沙箱 |
+
+以上沙箱选项适用于未设置 `permission_profile` 的情况。设置命名权限配置后，所有模式均优先使用该配置的文件系统和网络规则。
+
+### Codex 权限配置
+
+使用 `backend = "app_server"` 时，可通过 `permission_profile` 选择该 Codex 进程配置中的命名权限配置：
+
+```toml
+[projects.agent.options]
+backend = "app_server"
+mode = "suggest"
+permission_profile = "chat-workspace"
+```
+
+在对应 Codex 配置中定义该配置，例如 `codex_home` 下的 `config.toml`：
+
+```toml
+default_permissions = "chat-workspace"
+
+[permissions.chat-workspace.filesystem]
+":minimal" = "read"
+":workspace_roots" = "read"
+
+[permissions.chat-workspace.network]
+enabled = false
+```
+
+新建和恢复会话时，该配置替代模式对应的旧式沙箱选项；审批策略仍由模式决定。未设置时保持原有行为。`exec` 后端不支持此选项；Codex 未确认实际使用所选配置时，适配器会拒绝继续使用会话。需要支持命名权限配置及 `activePermissionProfile` 的 Codex 版本，已验证 0.164.0。
+
+`work_dir` 和只读沙箱本身不能将读取范围限制在项目内。选择性读取需要兼容的 Codex 沙箱；Windows 请参考 [MXC 沙箱配置](https://learn.chatgpt.com/docs/windows/windows-sandbox)。权限配置约束本地沙箱工具，不约束独立 MCP 或连接器；获批的权限提升也可能允许额外访问。详见 [官方权限文档](https://learn.chatgpt.com/docs/permissions)。
+
+### macOS 上的 Codex CLI 查找
+
+Codex 适配器按以下顺序选择可执行文件：
+
+1. 项目的 `cmd` 配置（兼容已弃用的 `cli_path` / `command`）。
+2. 未配置命令时，读取启动 cc-connect 的进程环境中的 `CODEX_CLI_PATH`。
+3. 从该进程的 `PATH` 查找可执行的 `codex`。
+4. macOS 下依次查找 `/Applications/ChatGPT.app`、`/Applications/Codex.app`；每个应用优先检查新目录 `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`，再检查旧目录 `Contents/Resources/codex`。
+
+PATH 中没有命令或软链接失效时，会继续查找桌面应用。显式命令或 `CODEX_CLI_PATH` 必须有效，否则报错。每次启动 CLI 子进程都会重新查找，以兼容应用更新后的目录变化。Linux、Windows 继续使用配置的命令或 PATH。
+
+`exec`、`app_server`、运行配置读取、技能查询及 `/doctor` 使用同一选择规则。路径包含空格或需要额外参数时，使用数组形式：
+
+```toml
+[projects.agent.options]
+cmd = ["/path with spaces/codex", "--profile", "work"]
+```
+
+此功能通过现有 Codex 适配器运行应用内置 CLI。桌面专有工具和共享会话写锁有独立的适配要求，参见 [桌面后端讨论 #651](https://github.com/chenhg5/cc-connect/issues/651) 和 [会话写锁冲突 #1909](https://github.com/chenhg5/cc-connect/issues/1909)。
 
 ### Cursor Agent 模式
 
@@ -1213,3 +1265,9 @@ proxy_password = ""
 
 完整说明见 [docs/telegram.md](./telegram.md#21-optional-use-a-proxy)（英文原文，
 `docs/telegram.md` 目前只有英文版）。该配置由 PR #389 引入。
+
+## 主动刷新服务商模型列表
+
+发送 `/model refresh`，或在 `/model` 卡片点击“刷新列表”，即可立即查询当前服务商。Codex 和 Claude Code 均支持。此命令会跳过配置文件及本地目录中的旧列表，成功后保存结果，后续打开 `/model` 及重启后都能使用。刷新不会切换当前模型，也不会打断正在执行的任务；手动登记过的模型仍可选择。
+
+服务商需要提供兼容的 `/v1/models` 接口。地址可以是根地址，也可以已经包含 `/v1`。请求失败、返回空列表或超时时会保留旧列表并提示原因。不同服务商及地址/鉴权设置使用独立缓存，需要更新时再次刷新即可。主动刷新会展示服务商返回的模型，包括网关自定义名称；使用时请选择兼容当前 Agent 的模型。

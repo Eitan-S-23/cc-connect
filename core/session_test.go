@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -180,14 +181,15 @@ func TestSessionManager_GetOrCreateActive_Persists(t *testing.T) {
 
 func TestSession_TryLockUnlock(t *testing.T) {
 	s := &Session{}
-	if !s.TryLock() {
+	gen, ok := s.TryLock()
+	if !ok {
 		t.Error("first TryLock should succeed")
 	}
-	if s.TryLock() {
+	if _, ok := s.TryLock(); ok {
 		t.Error("second TryLock should fail")
 	}
-	s.Unlock()
-	if !s.TryLock() {
+	s.Unlock(gen)
+	if _, ok := s.TryLock(); !ok {
 		t.Error("TryLock after Unlock should succeed")
 	}
 }
@@ -197,15 +199,67 @@ func TestSession_Busy(t *testing.T) {
 	if s.Busy() {
 		t.Error("fresh session should not be busy")
 	}
-	if !s.TryLock() {
+	if _, ok := s.TryLock(); !ok {
 		t.Fatal("TryLock should succeed")
 	}
 	if !s.Busy() {
 		t.Error("session should be busy after TryLock")
 	}
-	s.Unlock()
+	s.Unlock(0)
 	if s.Busy() {
 		t.Error("session should not be busy after Unlock")
+	}
+}
+
+// TestSession_LateUnlockDropped verifies the generation counter: after
+// BreakStaleLock re-assigns the lock to a newer turn, the old holder's late
+// Unlock must be dropped instead of clearing the new holder's busy flag
+// (custom 2026-09-12 busy stale-lock self-heal).
+func TestSession_LateUnlockDropped(t *testing.T) {
+	s := &Session{}
+	gen1, ok := s.TryLock()
+	if !ok {
+		t.Fatal("first TryLock should succeed")
+	}
+	if _, broken := s.BreakStaleLock(0); !broken {
+		t.Fatal("BreakStaleLock(0) should break the held lock")
+	}
+	gen2, ok := s.TryLock()
+	if !ok {
+		t.Fatal("relock after break should succeed")
+	}
+	if gen1 == gen2 {
+		t.Fatal("generation should advance after a break")
+	}
+	s.Unlock(gen1) // late unlock from the old holder
+	if !s.Busy() {
+		t.Fatal("late unlock with stale gen must be dropped; new holder's busy must survive")
+	}
+	s.Unlock(gen2)
+	if s.Busy() {
+		t.Fatal("unlock with current gen should release the lock")
+	}
+}
+
+// TestSession_BreakStaleLockThreshold verifies the held-duration gate: a lock
+// held shorter than maxHeld is never broken, one held longer is.
+func TestSession_BreakStaleLockThreshold(t *testing.T) {
+	s := &Session{}
+	if _, ok := s.TryLock(); !ok {
+		t.Fatal("TryLock should succeed")
+	}
+	if _, broken := s.BreakStaleLock(time.Hour); broken {
+		t.Fatal("lock held shorter than maxHeld must not break")
+	}
+	if _, broken := s.BreakStaleLock(0); !broken {
+		t.Fatal("lock held longer than maxHeld should break")
+	}
+	if s.Busy() {
+		t.Fatal("busy must be false after break")
+	}
+	// Breaking an unlocked session is a no-op.
+	if _, broken := s.BreakStaleLock(0); broken {
+		t.Fatal("BreakStaleLock on an unlocked session must be a no-op")
 	}
 }
 
@@ -1118,3 +1172,77 @@ func TestKnownAgentSessionIDs_ResetAllSessionsBug(t *testing.T) {
 	}
 }
 
+// TestSession_ForceUnlock covers the /stop path release (#1830): a held lock
+// is released unconditionally, the generation is bumped so the interrupted
+// turn's late Unlock is dropped, and ForceUnlock on an unlocked session is a
+// no-op.
+func TestSession_ForceUnlock(t *testing.T) {
+	s := &Session{}
+	gen, ok := s.TryLock()
+	if !ok {
+		t.Fatal("TryLock should succeed")
+	}
+	if !s.ForceUnlock() {
+		t.Fatal("ForceUnlock on a held lock should report release")
+	}
+	if s.Busy() {
+		t.Fatal("busy must be false after ForceUnlock")
+	}
+	s.Unlock(gen) // late unlock from the interrupted turn
+	if s.Busy() {
+		t.Fatal("late unlock after ForceUnlock must not re-clear or re-hold")
+	}
+	gen2, ok := s.TryLock()
+	if !ok || gen2 == gen {
+		t.Fatal("next TryLock must succeed with a new generation")
+	}
+	if s.ForceUnlock() != true {
+		t.Fatal("second ForceUnlock on held lock should release")
+	}
+	if s.ForceUnlock() {
+		t.Fatal("ForceUnlock on an unlocked session must be a no-op (false)")
+	}
+}
+
+// Official stale-lock generations must also protect the custom relay lease.
+func TestSessionStaleGenerationPreservesRelayReservation(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprint(force), func(t *testing.T) {
+			activity := &relayActivity{}
+			s := &Session{activity: activity}
+			old, ok := s.TryLock()
+			if !ok {
+				t.Fatal("initial lock failed")
+			}
+			if force {
+				s.ForceUnlock()
+			} else {
+				if _, ok := s.BreakStaleLock(0); !ok {
+					t.Fatal("stale lock not broken")
+				}
+			}
+			if !activity.reserve() {
+				t.Fatal("old activity leaked")
+			}
+			gen, ok := s.tryLock(true)
+			if !ok {
+				t.Fatal("relay lock failed")
+			}
+			s.Unlock(old)
+			activity.mu.Lock()
+			active, reserved := activity.active, activity.reserved
+			activity.mu.Unlock()
+			if !s.Busy() || active != 1 || !reserved {
+				t.Fatal("old unlock released the newer relay task")
+			}
+			s.Unlock(gen)
+			s.Unlock(gen)
+			activity.mu.Lock()
+			active, reserved = activity.active, activity.reserved
+			activity.mu.Unlock()
+			if active != 0 || reserved {
+				t.Fatal("relay lease leaked or was released twice")
+			}
+		})
+	}
+}

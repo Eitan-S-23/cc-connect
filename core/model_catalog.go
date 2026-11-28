@@ -77,7 +77,15 @@ func (e *Engine) availableModels(ctx context.Context, agent Agent) []ModelOption
 	if !ok {
 		return nil
 	}
-	discovered := switcher.AvailableModels(ctx)
+	var discovered []ModelOption
+	if refresher, ok := agent.(ModelRefresher); ok {
+		if store := e.modelCatalogStore(); store != nil {
+			discovered = store.refreshedModels(modelRefreshScope(agent, refresher)).Models
+		}
+	}
+	if len(discovered) == 0 {
+		discovered = switcher.AvailableModels(ctx)
+	}
 	var remembered []string
 	if store := e.modelCatalogStore(); store != nil {
 		remembered = store.rememberedModels(modelCatalogScope(agent))

@@ -62,23 +62,33 @@ type Session struct {
 
 	mu            sync.Mutex `json:"-"`
 	busy          bool       `json:"-"`
+	busySince     time.Time  `json:"-"` // custom 2026-09-12: when the busy lock was acquired (stale-lock self-heal)
 	activity      *relayActivity
 	relayReserved bool
+	lockGen       uint64 `json:"-"` // custom 2026-09-12: lock generation, invalidates late unlocks after BreakStaleLock
 }
 
-func (s *Session) TryLock() bool {
+// TryLock acquires the busy lock for a new turn. It returns a generation
+// number the holder MUST pass back to Unlock/UnlockWithoutUpdate; an unlock
+// carrying a stale generation (the lock was broken and re-acquired by a newer
+// turn) is silently dropped so a late unlock can never crosstalk with the
+// next turn. A gen of 0 bypasses the check (legacy escape hatch).
+// (custom 2026-09-12: busy stale-lock self-heal)
+func (s *Session) TryLock() (uint64, bool) {
 	return s.tryLock(false)
 }
 
-func (s *Session) tryLock(reserved bool) bool {
+func (s *Session) tryLock(reserved bool) (uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.busy || !s.activity.start(reserved) {
-		return false
+		return 0, false
 	}
-	s.busy = true
 	s.relayReserved = reserved
-	return true
+	s.busy = true
+	s.busySince = time.Now()
+	s.lockGen++
+	return s.lockGen, true
 }
 
 // Busy reports whether the session is currently locked for an in-flight turn.
@@ -89,25 +99,85 @@ func (s *Session) Busy() bool {
 	return s.busy
 }
 
-func (s *Session) Unlock() {
-	s.unlock(true)
+func (s *Session) Unlock(gen uint64) {
+	s.unlock(true, gen)
 }
 
-func (s *Session) UnlockWithoutUpdate() {
-	s.unlock(false)
+func (s *Session) UnlockWithoutUpdate(gen uint64) {
+	s.unlock(false, gen)
 }
 
-func (s *Session) unlock(update bool) {
+func (s *Session) unlock(update bool, gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// gen == 0 bypasses generation validation: a compatibility shim for tests
+	// written against the old bool Unlock() API. All production callers pass
+	// the gen they captured from TryLock. TODO: migrate the remaining
+	// Unlock(0) test call sites and drop this shim.
+	if gen != 0 && gen != s.lockGen {
+		// Late unlock after BreakStaleLock reassigned the lock to a newer
+		// turn: dropping it is the only safe option — applying it would clear
+		// busy underneath the new holder and let a third turn run concurrently.
+		return
+	}
 	if s.busy {
 		s.activity.finishTurn(s.relayReserved)
 		s.relayReserved = false
 	}
 	s.busy = false
+	s.busySince = time.Time{}
 	if update {
 		s.UpdatedAt = time.Now()
 	}
+}
+
+// BreakStaleLock releases a busy lock held longer than maxHeld and bumps
+// lockGen so the previous holder's late Unlock is invalidated. The caller
+// MUST first verify the agent process is dead — a live agent's legitimate
+// long turn must never be broken. The threshold callers should use is
+// deliberately above the 120s stop-hook wait cap so a graceful stop can
+// never collide with it. (custom 2026-09-12: busy stale-lock self-heal)
+func (s *Session) BreakStaleLock(maxHeld time.Duration) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.busy || s.busySince.IsZero() {
+		return time.Time{}, false
+	}
+	if time.Since(s.busySince) > maxHeld {
+		since := s.busySince
+		s.activity.finishTurn(s.relayReserved)
+		s.relayReserved = false
+		s.busy = false
+		s.busySince = time.Time{}
+		s.lockGen++ // invalidate the old holder's late unlock
+		return since, true
+	}
+	return time.Time{}, false
+}
+
+// busyStaleLockMaxHeld is how long the busy lock may be held by a dead agent
+// process before the next incoming message breaks it (custom 2026-09-12).
+// Deliberately above the 120s stop-hook wait cap so a graceful stop can
+// never collide with the self-heal.
+const busyStaleLockMaxHeld = 2 * time.Minute
+
+// ForceUnlock releases the busy lock unconditionally and bumps lockGen so
+// any late Unlock from the interrupted turn is dropped. Intended for paths
+// that tear the turn's execution environment down (e.g. /stop): the lock
+// holder will never run to its own Unlock. Returns true when a held lock
+// was released (#1830).
+func (s *Session) ForceUnlock() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.busy {
+		return false
+	}
+	s.activity.finishTurn(s.relayReserved)
+	s.relayReserved = false
+	s.busy = false
+	s.busySince = time.Time{}
+	s.lockGen++
+	return true
 }
 
 func (s *Session) AddHistory(role, content string) {
@@ -601,6 +671,39 @@ func (sm *SessionManager) KnownAgentSessionIDs() map[string]struct{} {
 		s.mu.Unlock()
 	}
 	return ids
+}
+
+// AgentSessionOwners maps each known agent session ID to the user key
+// (session_key) that last used it. Agent sessions created directly through the
+// CLI have no owner and are absent from the map, so callers can tell "belongs to
+// another conversation" apart from "belongs to nobody".
+//
+// Returns nil while the store predates ID tracking, matching
+// KnownAgentSessionIDs.
+func (sm *SessionManager) AgentSessionOwners() map[string]string {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	if sm.legacyData {
+		return nil
+	}
+	owners := make(map[string]string)
+	for userKey, ids := range sm.userSessions {
+		for _, sid := range ids {
+			s, ok := sm.sessions[sid]
+			if !ok {
+				continue
+			}
+			s.mu.Lock()
+			if s.AgentSessionID != "" {
+				owners[s.AgentSessionID] = userKey
+			}
+			for _, past := range s.PastAgentSessionIDs {
+				owners[past] = userKey
+			}
+			s.mu.Unlock()
+		}
+	}
+	return owners
 }
 
 // SessionKeyMap returns a mapping from session ID to the user key (session_key) it belongs to,

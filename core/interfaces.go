@@ -76,6 +76,20 @@ type RelayGroupVisibilityTarget interface {
 	RelayGroupVisibilityKey(callerSessionKey string) (groupSessionKey string, ok bool)
 }
 
+// ChannelScopedSessionKey is an optional interface for platforms whose session
+// keys encode a per-thread channel scope, such as a Feishu topic or a Discord
+// thread. Such platforms can bind one workspace per thread, and the binding key
+// must carry that scope.
+//
+// Core cannot parse platform-private session-key layouts, so platforms convert
+// their own format via this interface. Implementations return the channel scope
+// WITHOUT the platform name — core prepends it. Returning ("", false) makes
+// core fall back to its generic parsing, which keeps the chat-level key and is
+// correct for platforms without per-thread scoping.
+type ChannelScopedSessionKey interface {
+	ChannelKeyFromSessionKey(sessionKey string) (channelKey string, ok bool)
+}
+
 // MessageRecallDetector is an optional interface for platforms that can check
 // whether the message targeted by a reply context was recalled/deleted.
 type MessageRecallDetector interface {
@@ -418,6 +432,12 @@ type PermissionResult struct {
 	Message      string         `json:"message,omitempty"`      // reason for deny
 }
 
+// UserInputSteerer delivers an answer to a non-blocking question while the agent
+// continues working. False means there is no active turn; use normal Send instead.
+type UserInputSteerer interface {
+	SteerUserInput(prompt string) (bool, error)
+}
+
 // ToolAuthorizer is an optional interface for agents that support dynamic tool authorization.
 type ToolAuthorizer interface {
 	AddAllowedTools(tools ...string) error
@@ -480,6 +500,13 @@ type ModelSwitcher interface {
 	// AvailableModels tries to fetch models from the provider API.
 	// Falls back to a built-in list on failure.
 	AvailableModels(ctx context.Context) []ModelOption
+}
+
+// ModelRefresher supports explicit provider discovery, bypassing local catalogs.
+// The key covers effective endpoint/auth settings and must not contain secrets.
+type ModelRefresher interface {
+	RefreshModels(ctx context.Context) ([]ModelOption, error)
+	ModelCatalogKey() string
 }
 
 // ReasoningEffortSwitcher is an optional interface for agents that support

@@ -216,7 +216,7 @@ func (e *Engine) dispatchAutoRetry(r *autoRetryRun, state *interactiveState, ses
 
 // Keep the same session lock and sender/heartbeat identity across attempts.
 // The caller, not a detached timer, remains responsible for queue draining.
-func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTyping func(), sendDone <-chan error, replyCtx any) {
+func (e *Engine) processInteractiveEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, msgID string, turnStart time.Time, stopTyping func(), sendDone <-chan error, replyCtx any, lockGen uint64) {
 	state.mu.Lock()
 	as := state.agentSession
 	state.mu.Unlock()
@@ -236,7 +236,7 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 		}()
 	}
 	for {
-		err := e.processInteractiveAttempt(state, session, sessions, sessionKey, msgID, turnStart, stopTyping, sendDone, replyCtx, r)
+		err := e.processInteractiveAttempt(state, session, sessions, sessionKey, msgID, turnStart, stopTyping, sendDone, replyCtx, r, lockGen)
 		if r == nil || !e.waitAutoRetry(r, state, session, sessions, as, policy, err) {
 			if err == nil {
 				err = fmt.Errorf("%s", e.i18n.T(MsgRelayLiveInterrupted))

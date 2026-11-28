@@ -259,7 +259,8 @@ func (e *Engine) startLiveRelay(from, prompt string, inbox relayInbox) (<-chan r
 		return nil, fmt.Errorf("relay: target delivery failed: %w", err)
 	}
 	session := sessions.GetOrCreateActive(inbox.SessionKey)
-	if !session.tryLock(true) {
+	lockGen, locked := session.tryLock(true)
+	if !locked {
 		return nil, fmt.Errorf("%s", e.i18n.T(MsgRelayLiveBusy))
 	}
 	// The session now owns the reservation. Unlock releases both atomically,
@@ -270,7 +271,7 @@ func (e *Engine) startLiveRelay(from, prompt string, inbox relayInbox) (<-chan r
 	msg.onRelayResult = func(text string, err error) { once.Do(func() { done <- relayOutcome{text, err} }) }
 	e.ensureInteractiveStateForQueueing(key, p, replyCtx)
 	go func() {
-		e.processInteractiveMessageWith(p, msg, session, agent, sessions, key, workspace, inbox.SessionKey)
+		e.processInteractiveMessageWith(p, msg, session, agent, sessions, key, workspace, inbox.SessionKey, lockGen)
 	}()
 	return done, nil
 }

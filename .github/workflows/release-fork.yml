@@ -1,6 +1,6 @@
 name: Release (fork)
 
-# fork-v* 标签发布；relay-live 功能分支只验证和构建，不发布。
+# fork-v* 标签发布；功能分支只验证和构建，不发布。
 # 产物命名与官方 chenhg5/cc-connect 保持一致：
 #   cc-connect-<version>-<goos>-<goarch>.tar.gz  （非 Windows）
 #   cc-connect-<version>-<goos>-<goarch>.zip     （Windows）
@@ -9,6 +9,7 @@ on:
   push:
     branches:
       - 'feature/relay-live-*'
+      - 'codex/official-fixes-model-refresh'
     tags:
       - 'fork-v*'
       - 'ci-relay-live-*'
@@ -101,11 +102,11 @@ jobs:
 
       - name: Build and vet all packages
         run: |
-          go build -tags goolm ./...
-          go vet -tags goolm ./...
+          bash .github/ci-command.sh build go build -tags goolm ./...
+          bash .github/ci-command.sh vet go vet -tags goolm ./...
 
       - name: Run full repository race tests
-        run: go test -race -tags goolm -count=1 -timeout 10m ./...
+        run: bash .github/ci-command.sh tests go test -race -tags goolm -count=1 -timeout 10m ./...
 
       - name: Verify live delegation and legacy relay contracts
         run: go test -race -tags goolm -count=1 -timeout 3m ./core ./platform/feishu ./config -run 'Test(Relay|CUJ_Relay|PrivateChat|ConfigRelay)'
@@ -117,6 +118,10 @@ jobs:
           go test -race -tags goolm -count=1 ./core -run TestCUJ
           go test -race -tags goolm -count=1 -v ./core -run '^TestDirListCardAction_UnreadableChildPreservesSessionAndRetry$' | tee .cache/permission.log
           grep -q '^--- PASS: TestDirListCardAction_UnreadableChildPreservesSessionAndRetry' .cache/permission.log
+
+      - name: Compare Codex session listing with official v1.5.4
+        if: contains(github.ref_name, 'official-fixes')
+        run: bash .github/benchmark-codex-list.sh
 
       - name: Upload verified web assets
         uses: actions/upload-artifact@v4

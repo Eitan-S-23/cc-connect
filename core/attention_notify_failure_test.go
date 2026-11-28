@@ -108,6 +108,7 @@ func TestAttentionNotifyFailureKinds(t *testing.T) {
 			e.attentionNotify.MinDuration = time.Hour
 			sendAttentionMessage(e, p, "failure", "ou_alice")
 			waitAttentionIdle(t, e)
+
 			got := p.getNotifications()
 			if len(got) != 1 || got[0].userID != "ou_alice" || got[0].text != e.i18n.T(MsgAttentionTurnFailed) {
 				t.Fatalf("terminal error %q: notifications = %+v, want one error mention", detail, got)
@@ -234,6 +235,10 @@ func TestAttentionNotifyRuntimeStops(t *testing.T) {
 				e.stopInteractiveSessionSilently("test:attention")
 			}
 			waitAttentionIdle(t, e)
+			// /stop now releases the session before the reader finishes.
+			if count > 0 {
+				waitForAttention(t, p, count)
+			}
 			got := p.getNotifications()
 			if len(got) != count {
 				t.Fatalf("notifications = %+v, want %d", got, count)

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -397,21 +396,24 @@ func (a *Agent) AvailableModels(ctx context.Context) []core.ModelOption {
 	}
 }
 
-func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
+func (a *Agent) modelAPISettings() (string, map[string]string) {
 	a.mu.Lock()
-	apiKey := ""
-	baseURL := ""
+	defer a.mu.Unlock()
+	apiKey, baseURL := "", ""
+	headers := make(map[string]string)
 	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
-		apiKey = a.providers[a.activeIdx].APIKey
-		baseURL = a.providers[a.activeIdx].BaseURL
-	}
-	a.mu.Unlock()
+		provider := a.providers[a.activeIdx]
+		apiKey, baseURL = provider.APIKey, provider.BaseURL
+		if apiKey == "" {
+			apiKey = provider.Env["ANTHROPIC_API_KEY"]
+		}
+		if baseURL == "" {
+			baseURL = provider.Env["ANTHROPIC_BASE_URL"]
+		}
 
+	}
 	if apiKey == "" {
 		apiKey = os.Getenv("ANTHROPIC_API_KEY")
-	}
-	if apiKey == "" {
-		return nil
 	}
 	if baseURL == "" {
 		baseURL = os.Getenv("ANTHROPIC_BASE_URL")
@@ -419,38 +421,32 @@ func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
 	}
-	baseURL = strings.TrimRight(baseURL, "/")
+	if apiKey != "" {
+		headers["x-api-key"] = apiKey
+		headers["anthropic-version"] = "2023-06-01"
+	}
+	return baseURL, headers
+}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/v1/models", nil)
+func (a *Agent) ModelCatalogKey() string {
+	baseURL, headers := a.modelAPISettings()
+	return core.ModelCatalogKey(baseURL, headers)
+}
+
+func (a *Agent) RefreshModels(ctx context.Context) ([]core.ModelOption, error) {
+	baseURL, headers := a.modelAPISettings()
+	return core.FetchModelCatalog(ctx, baseURL, headers)
+}
+
+func (a *Agent) fetchModelsFromAPI(ctx context.Context) []core.ModelOption {
+	_, headers := a.modelAPISettings()
+	if len(headers) == 0 {
+		return nil
+	}
+	models, err := a.RefreshModels(ctx)
 	if err != nil {
+		slog.Debug("claudecode: model discovery failed", "error", err)
 		return nil
-	}
-	req.Header.Set("x-api-key", apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		slog.Debug("claudecode: failed to fetch models", "error", err)
-		return nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil
-	}
-
-	var result struct {
-		Data []struct {
-			ID          string `json:"id"`
-			DisplayName string `json:"display_name"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil
-	}
-
-	var models []core.ModelOption
-	for _, m := range result.Data {
-		models = append(models, core.ModelOption{Name: m.ID, Desc: m.DisplayName})
 	}
 	return models
 }

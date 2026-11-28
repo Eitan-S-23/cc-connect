@@ -162,7 +162,7 @@ func TestRecoveryPendingContextSurvivesIdleRotation(t *testing.T) {
 	source.RecoveryContext = "pending context after failed first turn"
 	source.LastUserActivity = time.Now().Add(-time.Hour)
 	source.mu.Unlock()
-	if e.maybeAutoResetSessionOnIdle(p, recoveryUserMessage("continue"), e.sessions, "test:user", source) != nil ||
+	if replacement, _ := e.maybeAutoResetSessionOnIdle(p, recoveryUserMessage("continue"), e.sessions, "test:user", source, 0); replacement != nil ||
 		e.sessions.GetOrCreateActive("test:user") != source {
 		t.Fatal("idle rotation discarded pending recovery context")
 	}
@@ -177,7 +177,7 @@ func TestRecoveryRejectsBusyStaleAndDisabledRequests(t *testing.T) {
 			switch mode {
 			case "busy":
 				source.TryLock()
-				defer source.Unlock()
+				defer source.Unlock(0)
 			case "stale":
 				command += " another-users-thread"
 			case "disabled":
@@ -360,4 +360,20 @@ func waitRecovery(t *testing.T, condition func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("recovery condition timed out")
+}
+
+func TestRecoveryTargetHonorsConversationOwnership(t *testing.T) {
+	a := &recoveryTestAgent{sessions: []AgentSessionInfo{{ID: "mine"}, {ID: "other"}}}
+	e, _, _ := newRecoveryTestEngine(t, a)
+	e.multiWorkspace = true
+	e.sessions.GetOrCreateActive("test:mine").SetAgentSessionID("mine", a.Name())
+	e.sessions.GetOrCreateActive("test:other").SetAgentSessionID("other", a.Name())
+	got, err := e.matchRecoveryTarget(a, e.sessions, "test:mine", "mine")
+	if err != nil || got == nil || got.ID != "mine" {
+		t.Fatal("own session was hidden", got, err)
+	}
+	got, err = e.matchRecoveryTarget(a, e.sessions, "test:mine", "other")
+	if err != nil || got != nil {
+		t.Fatal("another conversation's session was exposed", got, err)
+	}
 }

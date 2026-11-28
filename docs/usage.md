@@ -64,6 +64,8 @@ Buttons keep acting on the session they were rendered for, and a recovery that l
 
 The next message carries the recovered context. No model request or task retry happens when clicking the button, so preparation is not a connectivity check. The pending context survives restarts and failed first turns and is released after a successful turn has a backend session ID. Recovery is bounded to 128 KiB total and 16 KiB per entry, prioritizing the initial request and recent context. Truncation or previous compaction is disclosed. Provider-side errors can still recur; missing or unreadable history leaves the current chat unchanged.
 
+Codex `/ps` steering requires an app-server that implements `turn/steer` (codex-cli 0.166.0 or newer). Older CLIs return a method-not-supported error; upgrade the Codex CLI to use this feature.
+
 cc-connect rotates to a fresh session automatically after long inactivity:
 
 ```toml
@@ -100,12 +102,62 @@ All agents support permission modes switchable at runtime via `/mode`.
 
 ### Codex Modes
 
-| Mode | Config Value | Behavior |
-|------|-------------|----------|
-| Suggest | `suggest` | Only trusted commands run without approval |
-| Auto Edit | `auto-edit` | Model decides when to ask |
-| Full Auto | `full-auto` | Auto-approve with sandbox |
-| YOLO | `yolo` | Bypass all approvals and sandbox |
+| Mode | Config value | `exec` (default backend) | `app_server` |
+|------|-------------|--------------------------|--------------|
+| Suggest | `suggest` | Read-only; no interactive approvals | Read-only; approval on request |
+| Auto Edit | `auto-edit` | Workspace-write; no approvals | Workspace-write; no approvals |
+| Full Auto | `full-auto` | Workspace-write; no approvals | Workspace-write; no approvals |
+| YOLO | `yolo` | Bypass approvals and sandbox | Bypass approvals and sandbox |
+
+These sandbox selections apply when `permission_profile` is unset. With a named profile, its filesystem and network rules take precedence in every mode.
+
+### Codex permission profiles
+
+With `backend = "app_server"`, set `permission_profile` to select a named profile from the Codex configuration used by that process:
+
+```toml
+[projects.agent.options]
+backend = "app_server"
+mode = "suggest"
+permission_profile = "chat-workspace"
+```
+
+Define the profile in the relevant Codex config (for example, `config.toml` under `codex_home`):
+
+```toml
+default_permissions = "chat-workspace"
+
+[permissions.chat-workspace.filesystem]
+":minimal" = "read"
+":workspace_roots" = "read"
+
+[permissions.chat-workspace.network]
+enabled = false
+```
+
+The profile replaces the mode's legacy sandbox selection for both new and resumed sessions; the mode still determines the approval policy. Without this option, existing behavior is unchanged. The adapter rejects the option on the `exec` backend and refuses to use a session unless Codex confirms the requested profile. This requires a Codex version supporting named profiles and `activePermissionProfile` (verified with 0.164.0).
+
+`work_dir` and a read-only sandbox alone do not restrict reads to the project. Selective read access requires a compatible Codex sandbox; on Windows, use the [MXC sandbox configuration](https://learn.chatgpt.com/docs/windows/windows-sandbox). Permission profiles govern local sandboxed tools, not independent MCP/connectors, and approved escalations may grant additional access. See the [official permissions documentation](https://learn.chatgpt.com/docs/permissions).
+
+### Codex CLI discovery on macOS
+
+The Codex adapter resolves its executable in this order:
+
+1. The project `cmd` option (including the deprecated `cli_path` / `command` aliases).
+2. `CODEX_CLI_PATH` from the environment that starts cc-connect, when no command is configured.
+3. An executable `codex` on that process's `PATH`.
+4. On macOS, `/Applications/ChatGPT.app`, then `/Applications/Codex.app`. Within each app, the current `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` layout is checked before the legacy `Contents/Resources/codex` layout.
+
+Desktop discovery handles a missing PATH command or a broken PATH symlink. An explicit command or `CODEX_CLI_PATH` must be executable; an invalid override reports an error. Discovery is repeated before each CLI process starts so an app update can change the bundled layout. Linux and Windows continue to use the configured command or PATH.
+
+Both `exec` and `app_server`, runtime configuration reads, skill queries, and `/doctor` use this selection. Use the array form for paths containing spaces or additional CLI arguments:
+
+```toml
+[projects.agent.options]
+cmd = ["/path with spaces/codex", "--profile", "work"]
+```
+
+This runs the bundled CLI using the existing Codex adapter. Desktop-only tools and shared-thread locking have separate requirements; see [Desktop backend discussion #651](https://github.com/chenhg5/cc-connect/issues/651) and [thread writer conflict #1909](https://github.com/chenhg5/cc-connect/issues/1909).
 
 ### Cursor Agent Modes
 
@@ -1314,3 +1366,9 @@ tunneled through it.
 
 Full reference: [docs/telegram.md](./telegram.md#21-optional-use-a-proxy).
 This option was added in PR #389.
+
+## Refresh the provider model list
+
+Send `/model refresh`, or click **Refresh list** in `/model`, to query the active provider immediately. Codex and Claude Code support this command. It bypasses configured/native lists and saves a successful response for subsequent `/model` commands and restarts. The current model and any running task remain unchanged. Manually registered models remain selectable.
+
+The provider must expose a compatible `/v1/models` endpoint. Both a root base URL and one already ending in `/v1` are accepted. A failed, empty or timed-out response retains the previous list and reports the reason. Switching providers or changing endpoint/auth settings selects a separate cache; run the command again to update it. The refreshed provider list can include gateway-specific models; select one compatible with your agent.

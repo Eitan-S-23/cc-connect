@@ -251,10 +251,10 @@ func TestRelayLiveRejectsBusyAcrossAllSessionManagers(t *testing.T) {
 				if kind == "side" {
 					s = sm.NewSideSession("another-chat", "cron")
 				}
-				if !s.TryLock() {
+				if _, ok := s.TryLock(); !ok {
 					t.Fatal("could not start existing task")
 				}
-				release = s.Unlock
+				release = func() { s.Unlock(0) }
 			}
 			defer release()
 			_, err := f.rm.Send(context.Background(), f.request())
@@ -506,7 +506,7 @@ func TestRelayActivityAdmissionRace(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		var normal, reserved bool
-		go func() { defer wg.Done(); <-start; normal = s.TryLock() }()
+		go func() { defer wg.Done(); <-start; _, normal = s.TryLock() }()
 		go func() { defer wg.Done(); <-start; reserved = a.reserve() }()
 		close(start)
 		wg.Wait()
@@ -514,7 +514,7 @@ func TestRelayActivityAdmissionRace(t *testing.T) {
 			t.Fatalf("admission normal=%v relay=%v", normal, reserved)
 		}
 		if normal {
-			s.Unlock()
+			s.Unlock(0)
 		} else {
 			a.release()
 		}
@@ -541,10 +541,10 @@ func TestRelayLiveStopAndErrorReleaseBusyState(t *testing.T) {
 				defer f.b.relayActivity.mu.Unlock()
 				return f.b.relayActivity.active == 0 && !f.b.relayActivity.reserved
 			})
-			if !f.b.sessions.GetOrCreateActive("other").TryLock() {
+			if _, ok := f.b.sessions.GetOrCreateActive("other").TryLock(); !ok {
 				t.Fatal("target left permanently busy")
 			}
-			f.b.sessions.GetOrCreateActive("other").Unlock()
+			f.b.sessions.GetOrCreateActive("other").Unlock(0)
 		})
 	}
 }
@@ -636,16 +636,36 @@ func TestRelayActivityRestoredSessionsAndAtomicRelease(t *testing.T) {
 	sm.GetOrCreateActive("chat")
 	a := &relayActivity{}
 	restored := NewSessionManager(file, a).GetOrCreateActive("chat")
-	if !restored.TryLock() || a.reserve() {
+	if _, ok := restored.TryLock(); !ok || a.reserve() {
 		t.Fatal("restored busy session not counted")
 	}
-	restored.Unlock()
-	if !a.reserve() || !restored.tryLock(true) {
+	restored.Unlock(0)
+	if !a.reserve() {
+		t.Fatal("reserve failed")
+	}
+	if _, ok := restored.tryLock(true); !ok {
 		t.Fatal("delegated lock rejected")
 	}
-	restored.Unlock()
-	if !restored.TryLock() {
+	restored.Unlock(0)
+	if _, ok := restored.TryLock(); !ok {
 		t.Fatal("reservation not released atomically")
 	}
-	restored.Unlock()
+	restored.Unlock(0)
+}
+
+type failingCancelSession struct{ *liveTestSession }
+
+func (s *failingCancelSession) CancelTurn() error { return errors.New("cancel transport closed") }
+
+func TestRelayLiveFailedCancelClosesWithoutDoubleUnlock(t *testing.T) {
+	f := newLiveFixture(t)
+	f.agent.override = &failingCancelSession{f.as}
+	f.setup()
+	done := f.send()
+	liveAwaitPrompt(t, f.as)
+	f.command(f.b, f.pb, "b-chat", "/stop")
+	if result := liveAwaitResult(t, done); result.err == nil {
+		t.Fatal("failed cancellation reported success")
+	}
+	liveWait(t, func() bool { return !f.b.sessions.GetOrCreateActive("test:b-chat:admin").Busy() })
 }

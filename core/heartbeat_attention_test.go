@@ -382,8 +382,8 @@ func TestHeartbeatAttentionBackgroundCompletionAndError(t *testing.T) {
 	s.events <- Event{Type: EventError, Error: errors.New("late background failure")}
 	select {
 	case <-readerDone:
-	case <-time.After(3 * time.Second):
-		t.Fatal("background error did not stop the event reader")
+		t.Fatal("recoverable background error stopped the event reader")
+	case <-time.After(30 * time.Millisecond):
 	}
 	if got := p.getNotifications(); len(got) != 1 {
 		t.Fatalf("background failure generated another mention: %+v", got)

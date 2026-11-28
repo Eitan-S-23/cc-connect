@@ -35,7 +35,8 @@ import (
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
 
-// sanitizingLogger wraps a logger and masks sensitive URL parameters.
+// sanitizingLogger masks sensitive URL parameters and respects the application log level.
+// The WebSocket SDK does not apply WithLogLevel to a custom logger.
 type sanitizingLogger struct {
 	inner larkcore.Logger
 }
@@ -71,7 +72,11 @@ func (l *sanitizingLogger) sanitize(s string) string {
 	return s
 }
 
+// Debug forwards sanitized SDK messages only when the application enables this level.
 func (l *sanitizingLogger) Debug(ctx context.Context, args ...interface{}) {
+	if !slog.Default().Enabled(ctx, slog.LevelDebug) {
+		return
+	}
 	for _, arg := range args {
 		s, ok := arg.(string)
 		if !ok {
@@ -85,15 +90,27 @@ func (l *sanitizingLogger) Debug(ctx context.Context, args ...interface{}) {
 	l.inner.Debug(ctx, l.maskURL(args...)...)
 }
 
+// Info forwards sanitized SDK messages only when the application enables this level.
 func (l *sanitizingLogger) Info(ctx context.Context, args ...interface{}) {
+	if !slog.Default().Enabled(ctx, slog.LevelInfo) {
+		return
+	}
 	l.inner.Info(ctx, l.maskURL(args...)...)
 }
 
+// Warn forwards sanitized SDK messages only when the application enables this level.
 func (l *sanitizingLogger) Warn(ctx context.Context, args ...interface{}) {
+	if !slog.Default().Enabled(ctx, slog.LevelWarn) {
+		return
+	}
 	l.inner.Warn(ctx, l.maskURL(args...)...)
 }
 
+// Error forwards sanitized SDK messages only when the application enables this level.
 func (l *sanitizingLogger) Error(ctx context.Context, args ...interface{}) {
+	if !slog.Default().Enabled(ctx, slog.LevelError) {
+		return
+	}
 	l.inner.Error(ctx, l.maskURL(args...)...)
 }
 
@@ -138,7 +155,6 @@ type Platform struct {
 	client                      *lark.Client
 	replayClient                *lark.Client
 	replayClientMu              sync.Mutex
-	wsClient                    *larkws.Client
 	handler                     core.MessageHandler
 	cardNavHandler              core.CardNavigationHandler
 	authenticatedCardNavHandler core.AuthenticatedCardNavigationHandler
@@ -165,13 +181,16 @@ type Platform struct {
 	recalledMu             sync.Mutex
 	recalledMsgIDs         map[string]time.Time // message_id -> recall time, short TTL race guard
 	// Webhook mode fields (for Lark international version)
-	server       *http.Server
-	port         string
-	callbackPath string
-	encryptKey   string
-	eventHandler *dispatcher.EventDispatcher
-	sharedGroup  *sharedWSGroup // non-nil when sharing WebSocket with other platforms
-	isWSPrimary  bool           // true if this platform owns the shared WebSocket connection
+	server            *http.Server
+	port              string
+	callbackPath      string
+	encryptKey        string
+	eventHandler      *dispatcher.EventDispatcher
+	sharedGroup       *sharedWSGroup // non-nil when sharing WebSocket with other platforms
+	isWSPrimary       bool           // true if this platform owns the shared WebSocket connection
+	lifecycleHandler  core.PlatformLifecycleHandler
+	lifecycleReady    bool
+	lifecycleStopping bool
 	// cardActionMessageIDs tracks the most recent card-action messageID per
 	// session key, enabling async card refreshes via the Patch API.
 	cardActionMsgMu  sync.Mutex
@@ -544,9 +563,45 @@ func (p *Platform) KeepPreviewOnFinish() bool {
 	return p.useInteractiveCard
 }
 
+func (p *Platform) SetLifecycleHandler(h core.PlatformLifecycleHandler) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lifecycleHandler = h
+}
+
+func (p *Platform) notifyUnavailable(err error) {
+	p.mu.Lock()
+	if p.lifecycleStopping || !p.lifecycleReady {
+		p.mu.Unlock()
+		return
+	}
+	p.lifecycleReady = false
+	handler := p.lifecycleHandler
+	p.mu.Unlock()
+	if handler != nil {
+		handler.OnPlatformUnavailable(p, err)
+	}
+}
+
+func (p *Platform) notifyReady() {
+	p.mu.Lock()
+	if p.lifecycleStopping || p.lifecycleReady {
+		p.mu.Unlock()
+		return
+	}
+	p.lifecycleReady = true
+	handler := p.lifecycleHandler
+	p.mu.Unlock()
+	if handler != nil {
+		handler.OnPlatformReady(p)
+	}
+}
+
 func (p *Platform) Start(handler core.MessageHandler) error {
 	p.mu.Lock()
 	p.handler = handler
+	p.lifecycleStopping = false
+	p.lifecycleReady = false
 	p.mu.Unlock()
 
 	// In webhook mode (private/self-hosted Feishu/Lark), startup must not depend
@@ -589,6 +644,7 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 	// Secondary platforms skip connection creation — the primary's connection
 	// fans out events to all platforms in the shared group.
 	if !isPrimary {
+		group.syncLifecycle(p)
 		return nil
 	}
 
@@ -656,7 +712,12 @@ func (p *Platform) Start(handler core.MessageHandler) error {
 	}
 
 	if p.shouldUseWebhookMode() {
-		return p.startWebhookMode()
+		if err := p.startWebhookMode(); err != nil {
+			unregisterSharedWS(p)
+			p.stopGroupFilterSupervisor()
+			return err
+		}
+		return nil
 	}
 
 	return p.startWebSocketMode()
@@ -672,24 +733,78 @@ func (p *Platform) startWebSocketMode() error {
 		larkws.WithEventHandler(p.eventHandler),
 		larkws.WithLogLevel(larkcore.LogLevelInfo),
 		larkws.WithLogger(&sanitizingLogger{inner: larkcore.NewEventLogger()}),
+		// Use SDK-provided lifecycle callbacks to track connection state.
+		// These fire on actual WebSocket state transitions, solving the
+		// silent-disconnect problem where the SDK reconnects internally
+		// but the engine has no visibility into the state change.
+		larkws.WithOnReady(func() {
+			slog.Info(p.tag() + ": websocket connected, platform ready")
+			p.sharedGroup.setLifecycle(true, nil)
+		}),
+		larkws.WithOnDisconnected(func() {
+			slog.Warn(p.tag() + ": websocket disconnected")
+			p.sharedGroup.setLifecycle(false, fmt.Errorf("feishu: websocket disconnected"))
+		}),
+		larkws.WithOnReconnecting(func() {
+			slog.Warn(p.tag() + ": websocket reconnecting")
+			p.sharedGroup.setLifecycle(false, fmt.Errorf("feishu: websocket reconnecting"))
+		}),
+		larkws.WithOnReconnected(func() {
+			slog.Info(p.tag() + ": websocket reconnected, platform ready")
+			p.sharedGroup.setLifecycle(true, nil)
+		}),
+		larkws.WithOnError(func(err error) {
+			slog.Error(p.tag()+": websocket error", "error", err)
+			p.sharedGroup.setLifecycle(false, err)
+		}),
 	}
 	if p.domain != lark.FeishuBaseUrl {
 		wsOpts = append(wsOpts, larkws.WithDomain(p.domain))
 	}
-	p.wsClient = larkws.NewClient(p.appID, p.appSecret, wsOpts...)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	p.mu.Lock()
 	p.cancel = cancel
 	p.mu.Unlock()
 
-	go func() {
-		if err := p.wsClient.Start(ctx); err != nil {
-			slog.Error(p.tag()+": websocket error", "error", err)
-		}
-	}()
+	go p.runWebSocket(ctx, wsOpts)
 
 	return nil
+}
+
+// runWebSocket owns SDK clients across terminal reconnect failures. The SDK
+// handles ordinary reconnects, but a finite server-provided retry budget can
+// end Start after a temporary outage. A connected SDK client cannot be reused
+// once Start returns, so each recovery attempt needs a fresh client.
+func (p *Platform) runWebSocket(ctx context.Context, opts []larkws.ClientOption) {
+	backoff := time.Second
+	const maxBackoff = 30 * time.Second
+	for ctx.Err() == nil {
+		started := time.Now()
+		client := larkws.NewClient(p.appID, p.appSecret, opts...)
+		err := client.Start(ctx)
+		if ctx.Err() != nil || err == nil {
+			return
+		}
+		p.sharedGroup.setLifecycle(false, err)
+		var clientErr *larkws.ClientError
+		if errors.As(err, &clientErr) {
+			// Invalid credentials/configuration still require operator action.
+			slog.Error(p.tag()+": websocket fatal error, platform unavailable", "error", err)
+			return
+		}
+		if time.Since(started) >= maxBackoff {
+			backoff = time.Second
+		}
+		slog.Warn(p.tag()+": websocket client stopped, restarting", "error", err, "backoff", backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		backoff = min(backoff*2, maxBackoff)
+	}
 }
 
 // startWebhookMode starts the HTTP webhook server mode (for Lark international version)
@@ -707,13 +822,18 @@ func (p *Platform) startWebhookMode() error {
 	p.cancel = cancel
 	p.mu.Unlock()
 
+	listener, err := net.Listen("tcp", p.server.Addr)
+	if err != nil {
+		return fmt.Errorf("feishu: webhook listen: %w", err)
+	}
+	p.sharedGroup.setLifecycle(true, nil)
 	go func() {
 		slog.Info(p.tag()+": webhook server listening", "port", p.port, "path", p.callbackPath)
-		if err := p.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := p.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			slog.Error(p.tag()+": webhook server error", "error", err)
+			p.sharedGroup.setLifecycle(false, err)
 		}
 	}()
-
 	return nil
 }
 
@@ -1186,7 +1306,7 @@ func (p *Platform) IsMessageRecalled(ctx context.Context, rctx any) (bool, error
 
 	req := larkim.NewGetMessageReqBuilder().
 		MessageId(messageID).
-		UserIdType(larkim.UserIdTypeGetMessageOpenId).
+		UserIdType(larkim.UserIdTypeOpenId).
 		Build()
 
 	var resp *larkim.GetMessageResp
@@ -3141,13 +3261,13 @@ func detectFeishuFileType(mimeType, fileName string) string {
 	name := strings.ToLower(fileName)
 	switch {
 	case mimeType == "application/pdf" || strings.HasSuffix(name, ".pdf"):
-		return larkim.FileTypePdf
+		return larkim.CreateFileFileTypePdf
 	case strings.HasSuffix(name, ".doc") || strings.HasSuffix(name, ".docx"):
-		return larkim.FileTypeDoc
+		return larkim.CreateFileFileTypeDoc
 	case strings.HasSuffix(name, ".xls") || strings.HasSuffix(name, ".xlsx") || strings.HasSuffix(name, ".csv"):
-		return larkim.FileTypeXls
+		return larkim.CreateFileFileTypeXls
 	case strings.HasSuffix(name, ".ppt") || strings.HasSuffix(name, ".pptx"):
-		return larkim.FileTypePpt
+		return larkim.CreateFileFileTypePpt
 	// Feishu's file API only has "mp4" as the video type. We map all common
 	// video MIME types and extensions to FileTypeMp4 so the message renders
 	// as a native video player bubble rather than a generic file download.
@@ -3157,19 +3277,19 @@ func detectFeishuFileType(mimeType, fileName string) string {
 		strings.HasSuffix(name, ".mp4") || strings.HasSuffix(name, ".mov") ||
 		strings.HasSuffix(name, ".avi") || strings.HasSuffix(name, ".m4v") ||
 		strings.HasSuffix(name, ".mkv") || strings.HasSuffix(name, ".webm"):
-		return larkim.FileTypeMp4
+		return larkim.CreateFileFileTypeMp4
 	case mimeType == "audio/ogg" || mimeType == "audio/opus" || mimeType == "application/ogg" || strings.HasSuffix(name, ".ogg") || strings.HasSuffix(name, ".opus"):
-		return larkim.FileTypeOpus
+		return larkim.CreateFileFileTypeOpus
 	default:
-		return larkim.FileTypeStream
+		return larkim.CreateFileFileTypeStream
 	}
 }
 
 func detectFeishuFileMessageType(fileType string) string {
 	switch fileType {
-	case larkim.FileTypeOpus:
+	case larkim.CreateFileFileTypeOpus:
 		return larkim.MsgTypeAudio
-	case larkim.FileTypeMp4:
+	case larkim.CreateFileFileTypeMp4:
 		return larkim.MsgTypeMedia
 	default:
 		return larkim.MsgTypeFile
@@ -3839,7 +3959,7 @@ func (p *Platform) replyMessage(ctx context.Context, rc replyContext, msgType, c
 
 func (p *Platform) createMessage(ctx context.Context, chatID, msgType, content, op string) error {
 	req := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType(larkim.ReceiveIdTypeChatId).
+		ReceiveIdType(larkim.CreateMessageV1ReceiveIDTypeChatId).
 		Body(larkim.NewCreateMessageReqBodyBuilder().
 			ReceiveId(chatID).
 			MsgType(msgType).
@@ -4269,6 +4389,33 @@ func isThreadSessionKey(sessionKey string) bool {
 	}
 	_, ok := parseThreadRootID(parts[2])
 	return ok
+}
+
+// ChannelKeyFromSessionKey implements core.ChannelScopedSessionKey.
+//
+// With thread_isolation enabled, makeSessionKey (feishu.go:4099) encodes an
+// isolated thread — a topic, or a group-chat thread — as
+// "feishu:<chatID>:root:<rootID>", while workspace bindings are keyed
+// "feishu:<chatID>:topic:<rootID>" (populateWorkspaceChannelKeys,
+// feishu.go:1270). Core's generic parse keeps only the chat ID, which would
+// collapse every thread in a chat onto one binding, so the layout is declared
+// here instead of being hardcoded in core.
+//
+// The returned value omits the platform name; core prepends it.
+func (p *Platform) ChannelKeyFromSessionKey(sessionKey string) (string, bool) {
+	if !p.threadIsolation {
+		return "", false
+	}
+	// Four segments: <platform>:<chatID>:root|thread:<rootID>.
+	parts := strings.SplitN(sessionKey, ":", 4)
+	if len(parts) != 4 || parts[0] != p.platformName || parts[1] == "" {
+		return "", false
+	}
+	rootID, ok := parseThreadRootID(parts[2] + ":" + parts[3])
+	if !ok {
+		return "", false
+	}
+	return parts[1] + ":topic:" + rootID, true
 }
 
 // feishuPreviewHandle stores the message ID for an editable preview message.
@@ -4897,7 +5044,7 @@ func (p *Platform) SendPreviewStart(ctx context.Context, rctx any, content strin
 		}
 	} else {
 		req := larkim.NewCreateMessageReqBuilder().
-			ReceiveIdType(larkim.ReceiveIdTypeChatId).
+			ReceiveIdType(larkim.CreateMessageV1ReceiveIDTypeChatId).
 			Body(larkim.NewCreateMessageReqBodyBuilder().
 				ReceiveId(chatID).
 				MsgType(larkim.MsgTypeInteractive).
@@ -5179,6 +5326,12 @@ func (p *Platform) updateCardEntity(ctx context.Context, h *feishuPreviewHandle,
 }
 
 func (p *Platform) Stop() error {
+	p.mu.Lock()
+	p.lifecycleStopping = true
+	p.mu.Unlock()
+	if p.isWSPrimary && p.sharedGroup != nil {
+		p.sharedGroup.stopLifecycle(fmt.Errorf("feishu: primary connection stopped"))
+	}
 	// Issue #1618: stop the background supervisor that retries the
 	// bot-info API when startup discovery fails. Without this the
 	// goroutine could outlive the platform and leak into the next
@@ -5261,7 +5414,7 @@ func (p *Platform) SendAudio(ctx context.Context, rctx any, audio []byte, format
 		return p.withFreshTenantAccessTokenRetry(ctx, "upload audio", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
 			req := larkim.NewCreateFileReqBuilder().
 				Body(larkim.NewCreateFileReqBodyBuilder().
-					FileType(larkim.FileTypeOpus).
+					FileType(larkim.CreateFileFileTypeOpus).
 					FileName("tts_audio.opus").
 					File(bytes.NewReader(audio)).
 					Build()).
@@ -5336,7 +5489,7 @@ func (p *Platform) SendVideo(ctx context.Context, rctx any, video []byte, format
 		return p.withFreshTenantAccessTokenRetry(ctx, "upload video", func(client *lark.Client, options ...larkcore.RequestOptionFunc) error {
 			req := larkim.NewCreateFileReqBuilder().
 				Body(larkim.NewCreateFileReqBodyBuilder().
-					FileType(larkim.FileTypeMp4).
+					FileType(larkim.CreateFileFileTypeMp4).
 					FileName(fileName).
 					File(bytes.NewReader(video)).
 					Build()).

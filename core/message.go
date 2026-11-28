@@ -457,6 +457,7 @@ const (
 	EventResult            EventType = "result"             // final aggregated result
 	EventError             EventType = "error"              // error occurred
 	EventPermissionRequest EventType = "permission_request" // agent requests permission via stdio protocol
+	EventUserInputRequest  EventType = "user_input_request" // non-blocking question; answer is a user message
 	EventThinking          EventType = "thinking"           // thinking/processing status
 	// EventSessionStarted 表示 agent 侧的会话/线程 ID 已经确定，且早于回合结束。
 	// 引擎收到后立即落盘，这样即使该回合随后失败（限流、进程被杀），下一轮

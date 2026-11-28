@@ -276,6 +276,7 @@ const (
 	MsgListSwitchHint            MsgKey = "list_switch_hint"
 	MsgListError                 MsgKey = "list_error"
 	MsgHistoryEmpty              MsgKey = "history_empty"
+	MsgHistoryReadFailed         MsgKey = "history_read_failed"
 	MsgNameUsage                 MsgKey = "name_usage"
 	MsgNameSet                   MsgKey = "name_set"
 	MsgNameNoSession             MsgKey = "name_no_session"
@@ -351,18 +352,34 @@ const (
 	MsgCronBtnUnmute          MsgKey = "cron_btn_unmute"
 	MsgCronBtnDelete          MsgKey = "cron_btn_delete"
 
-	MsgStatusTitle           MsgKey = "status_title"
-	MsgReplyFooterRemaining  MsgKey = "reply_footer_remaining"
-	MsgModelCurrent          MsgKey = "model_current"
-	MsgModelChanged          MsgKey = "model_changed"
-	MsgModelChangeFailed     MsgKey = "model_change_failed"
-	MsgModelCardSwitching    MsgKey = "model_card_switching"
-	MsgModelCardSwitched     MsgKey = "model_card_switched"
-	MsgModelCardSwitchFailed MsgKey = "model_card_switch_failed"
-	MsgModelNotSupported     MsgKey = "model_not_supported"
-	MsgReasoningCurrent      MsgKey = "reasoning_current"
-	MsgReasoningChanged      MsgKey = "reasoning_changed"
-	MsgReasoningNotSupported MsgKey = "reasoning_not_supported"
+	MsgStatusTitle                 MsgKey = "status_title"
+	MsgReplyFooterRemaining        MsgKey = "reply_footer_remaining"
+	MsgModelRefreshButton          MsgKey = "model_refresh_button"
+	MsgModelRefreshUnsupported     MsgKey = "model_refresh_unsupported"
+	MsgModelRefreshBusy            MsgKey = "model_refresh_busy"
+	MsgModelRefreshFailed          MsgKey = "model_refresh_failed"
+	MsgModelRefreshDone            MsgKey = "model_refresh_done"
+	MsgModelRefreshHTTP            MsgKey = "model_refresh_http"
+	MsgModelRefreshEmpty           MsgKey = "model_refresh_empty"
+	MsgModelRefreshProviderChanged MsgKey = "model_refresh_providerchanged"
+	MsgModelRefreshSave            MsgKey = "model_refresh_save"
+	MsgModelRefreshTimeout         MsgKey = "model_refresh_timeout"
+	MsgModelRefreshInvalidResponse MsgKey = "model_refresh_invalidresponse"
+	MsgModelRefreshInvalidEndpoint MsgKey = "model_refresh_invalidendpoint"
+	MsgModelRefreshNetwork         MsgKey = "model_refresh_network"
+	MsgModelRefreshUpdated         MsgKey = "model_refresh_updated"
+	MsgModelRefreshUsage           MsgKey = "model_refresh_usage"
+	MsgModelCurrent                MsgKey = "model_current"
+	MsgModelChanged                MsgKey = "model_changed"
+	MsgModelChangeFailed           MsgKey = "model_change_failed"
+	MsgModelChangeQueued           MsgKey = "model_change_queued"
+	MsgModelCardSwitching          MsgKey = "model_card_switching"
+	MsgModelCardSwitched           MsgKey = "model_card_switched"
+	MsgModelCardSwitchFailed       MsgKey = "model_card_switch_failed"
+	MsgModelNotSupported           MsgKey = "model_not_supported"
+	MsgReasoningCurrent            MsgKey = "reasoning_current"
+	MsgReasoningChanged            MsgKey = "reasoning_changed"
+	MsgReasoningNotSupported       MsgKey = "reasoning_not_supported"
 
 	MsgAgentPreferencesSaveFailed MsgKey = "agent_preferences_save_failed"
 
@@ -479,6 +496,7 @@ const (
 	MsgAskQuestionMulti     MsgKey = "ask_question_multi"
 	MsgAskQuestionPrompt    MsgKey = "ask_question_prompt"
 	MsgAskQuestionAnswered  MsgKey = "ask_question_answered"
+	MsgAskQuestionStale     MsgKey = "ask_question_stale"
 
 	MsgCommandsTitle        MsgKey = "commands_title"
 	MsgCommandsEmpty        MsgKey = "commands_empty"
@@ -2110,6 +2128,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "現在のセッションに履歴がありません。",
 		LangSpanish:            "No hay historial en la sesión actual.",
 	},
+	MsgHistoryReadFailed: {
+		LangEnglish:            "Failed to read session history.",
+		LangChinese:            "读取会话历史失败。",
+		LangTraditionalChinese: "讀取會話歷史失敗。",
+		LangJapanese:           "セッション履歴の読み取りに失敗しました。",
+		LangSpanish:            "No se pudo leer el historial de la sesión.",
+	},
 	MsgNameUsage: {
 		LangEnglish:            "Usage:\n`/name <text>` — name the current session\n`/name <number> <text>` — name a session by list number",
 		LangChinese:            "用法：\n`/name <名称>` — 命名当前会话\n`/name <序号> <名称>` — 按列表序号命名会话",
@@ -2854,6 +2879,111 @@ var messages = map[MsgKey]map[Language]string{
 		LangJapanese:           "残り %d%%",
 		LangSpanish:            "%d%% restante",
 	},
+	MsgModelRefreshButton: {
+		LangEnglish:            "Refresh list",
+		LangChinese:            "刷新列表",
+		LangTraditionalChinese: "重新整理列表",
+		LangJapanese:           "一覧を更新",
+		LangSpanish:            "Actualizar lista",
+	},
+	MsgModelRefreshUnsupported: {
+		LangEnglish:            "This agent does not support fetching a model list.",
+		LangChinese:            "当前 Agent 不支持拉取模型列表。",
+		LangTraditionalChinese: "目前 Agent 不支援取得模型列表。",
+		LangJapanese:           "このエージェントはモデル一覧の取得に対応していません。",
+		LangSpanish:            "Este agente no permite obtener la lista de modelos.",
+	},
+	MsgModelRefreshBusy: {
+		LangEnglish:            "A model refresh is already in progress.",
+		LangChinese:            "正在刷新模型列表，请稍候。",
+		LangTraditionalChinese: "正在重新整理模型列表，請稍候。",
+		LangJapanese:           "モデル一覧を更新中です。",
+		LangSpanish:            "La lista de modelos ya se está actualizando.",
+	},
+	MsgModelRefreshFailed: {
+		LangEnglish:            "Refresh failed: %s. The previous list was kept.",
+		LangChinese:            "刷新失败：%s。已保留原有列表。",
+		LangTraditionalChinese: "重新整理失敗：%s。已保留原有列表。",
+		LangJapanese:           "更新に失敗しました: %s。以前の一覧を保持しました。",
+		LangSpanish:            "Error al actualizar: %s. Se conservó la lista anterior.",
+	},
+	MsgModelRefreshDone: {
+		LangEnglish:            "Fetched and saved %d models. The selected model is unchanged.",
+		LangChinese:            "已拉取并保存 %d 个模型，当前选择的模型保持不变。",
+		LangTraditionalChinese: "已取得並儲存 %d 個模型，目前選擇的模型保持不變。",
+		LangJapanese:           "%d 件のモデルを取得・保存しました。選択中のモデルは変更されません。",
+		LangSpanish:            "Se obtuvieron y guardaron %d modelos. El modelo seleccionado no cambió.",
+	},
+	MsgModelRefreshHTTP: {
+		LangEnglish:            "Provider returned HTTP %d; check the endpoint, credentials and model-list permission",
+		LangChinese:            "服务商返回 HTTP %d，请检查地址、凭据和模型列表权限",
+		LangTraditionalChinese: "服務商回傳 HTTP %d，請檢查位址、憑證與模型列表權限",
+		LangJapanese:           "プロバイダーが HTTP %d を返しました。URL・認証・一覧取得権限を確認してください",
+		LangSpanish:            "El proveedor devolvió HTTP %d; revisa la URL, las credenciales y los permisos",
+	},
+	MsgModelRefreshEmpty: {
+		LangEnglish:            "The provider returned no models",
+		LangChinese:            "服务商未返回可用模型",
+		LangTraditionalChinese: "服務商未回傳可用模型",
+		LangJapanese:           "プロバイダーからモデルが返されませんでした",
+		LangSpanish:            "El proveedor no devolvió modelos",
+	},
+	MsgModelRefreshProviderChanged: {
+		LangEnglish:            "The provider changed during refresh; retry with the current provider",
+		LangChinese:            "刷新期间服务商已切换，请重新刷新",
+		LangTraditionalChinese: "重新整理期間服務商已切換，請重試",
+		LangJapanese:           "更新中にプロバイダーが変更されました。再試行してください",
+		LangSpanish:            "El proveedor cambió durante la actualización; inténtalo de nuevo",
+	},
+	MsgModelRefreshSave: {
+		LangEnglish:            "Could not save the model list",
+		LangChinese:            "无法保存模型列表",
+		LangTraditionalChinese: "無法儲存模型列表",
+		LangJapanese:           "モデル一覧を保存できませんでした",
+		LangSpanish:            "No se pudo guardar la lista de modelos",
+	},
+	MsgModelRefreshTimeout: {
+		LangEnglish:            "The request timed out or was cancelled",
+		LangChinese:            "请求超时或已取消",
+		LangTraditionalChinese: "請求逾時或已取消",
+		LangJapanese:           "リクエストがタイムアウトまたはキャンセルされました",
+		LangSpanish:            "La solicitud agotó el tiempo o se canceló",
+	},
+	MsgModelRefreshInvalidResponse: {
+		LangEnglish:            "The provider returned an invalid or oversized model list",
+		LangChinese:            "服务商返回的模型列表格式无效或过大",
+		LangTraditionalChinese: "服務商回傳的模型列表格式無效或過大",
+		LangJapanese:           "モデル一覧の形式が無効かサイズが大きすぎます",
+		LangSpanish:            "La lista recibida no es válida o es demasiado grande",
+	},
+	MsgModelRefreshInvalidEndpoint: {
+		LangEnglish:            "The provider URL is invalid",
+		LangChinese:            "服务商地址无效",
+		LangTraditionalChinese: "服務商位址無效",
+		LangJapanese:           "プロバイダーの URL が無効です",
+		LangSpanish:            "La URL del proveedor no es válida",
+	},
+	MsgModelRefreshNetwork: {
+		LangEnglish:            "Could not reach the model-list API",
+		LangChinese:            "无法连接模型列表接口",
+		LangTraditionalChinese: "無法連線至模型列表介面",
+		LangJapanese:           "モデル一覧 API に接続できません",
+		LangSpanish:            "No se pudo conectar con la API de modelos",
+	},
+	MsgModelRefreshUpdated: {
+		LangEnglish:            "Provider list last refreshed: %s",
+		LangChinese:            "服务商列表刷新时间：%s",
+		LangTraditionalChinese: "服務商列表更新時間：%s",
+		LangJapanese:           "一覧の最終更新: %s",
+		LangSpanish:            "Última actualización del proveedor: %s",
+	},
+	MsgModelRefreshUsage: {
+		LangEnglish:            "Use /model refresh to fetch the provider list now.",
+		LangChinese:            "发送 /model refresh 可立即拉取服务商模型列表。",
+		LangTraditionalChinese: "傳送 /model refresh 可立即取得服務商模型列表。",
+		LangJapanese:           "/model refresh で一覧を取得できます。",
+		LangSpanish:            "Usa /model refresh para obtener la lista del proveedor.",
+	},
 	MsgModelCurrent: {
 		LangEnglish:            "Current model: %s",
 		LangChinese:            "当前模型: %s",
@@ -2867,6 +2997,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "模型已切換為 `%s`，當前會話與後續會話均使用此模型。",
 		LangJapanese:           "モデルを `%s` に切り替えました。このセッションと今後のセッションで使用されます。",
 		LangSpanish:            "Modelo cambiado a `%s`. Esta sesión y las futuras usarán este modelo.",
+	},
+	MsgModelChangeQueued: {
+		LangEnglish:            "Model switched to `%s`. A reply is still in progress; the new model takes effect once it finishes.",
+		LangChinese:            "模型已切换为 `%s`。当前回复仍在进行中，新模型将在其完成后生效。",
+		LangTraditionalChinese: "模型已切換為 `%s`。目前回覆仍在進行中，新模型將在其完成後生效。",
+		LangJapanese:           "モデルを `%s` に切り替えました。現在の応答が進行中のため、完了後に新しいモデルが適用されます。",
+		LangSpanish:            "Modelo cambiado a `%s`. Hay una respuesta en curso; el nuevo modelo se aplicará cuando termine.",
 	},
 	MsgModelChangeFailed: {
 		LangEnglish:            "❌ Failed to change model: %v",
@@ -3150,11 +3287,11 @@ var messages = map[MsgKey]map[Language]string{
 		LangSpanish:            "Niveles de razonamiento disponibles:\n",
 	},
 	MsgReasoningUsage: {
-		LangEnglish:            "Usage: `/reasoning <number>` or `/reasoning <low|medium|high|xhigh|max>`",
-		LangChinese:            "用法: `/reasoning <序号>` 或 `/reasoning <low|medium|high|xhigh|max>`",
-		LangTraditionalChinese: "用法: `/reasoning <序號>` 或 `/reasoning <low|medium|high|xhigh|max>`",
-		LangJapanese:           "使い方: `/reasoning <番号>` または `/reasoning <low|medium|high|xhigh|max>`",
-		LangSpanish:            "Uso: `/reasoning <número>` o `/reasoning <low|medium|high|xhigh|max>`",
+		LangEnglish:            "Usage: `/reasoning <number>` or `/reasoning <%s>`",
+		LangChinese:            "用法: `/reasoning <序号>` 或 `/reasoning <%s>`",
+		LangTraditionalChinese: "用法: `/reasoning <序號>` 或 `/reasoning <%s>`",
+		LangJapanese:           "使い方: `/reasoning <番号>` または `/reasoning <%s>`",
+		LangSpanish:            "Uso: `/reasoning <número>` o `/reasoning <%s>`",
 	},
 	MsgModeUsage: {
 		LangEnglish:            "\nUse `/mode <name>` to switch.\nAvailable: %s",
@@ -3414,6 +3551,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "已回答",
 		LangJapanese:           "回答済み",
 		LangSpanish:            "Respondido",
+	},
+	MsgAskQuestionStale: {
+		LangEnglish:            "⚠️ That question was already answered or is no longer active, so this answer was not sent to the agent.",
+		LangChinese:            "⚠️ 这个问题已经回答过了或已失效，这次的回答没有发给 agent。",
+		LangTraditionalChinese: "⚠️ 這個問題已經回答過了或已失效，這次的回答沒有發給 agent。",
+		LangJapanese:           "⚠️ この質問は回答済みか無効になっているため、この回答はエージェントに送信されませんでした。",
+		LangSpanish:            "⚠️ Esa pregunta ya se respondió o ya no está activa, así que esta respuesta no se envió al agente.",
 	},
 	MsgCommandsTitle: {
 		LangEnglish:            "🔧 **Custom Commands** (%d)\n\n",
