@@ -329,3 +329,44 @@ func TestRestartNotify_PanicInSendRecovered(t *testing.T) {
 		t.Fatalf("a panicking stub should never record a successful send, got %v", got)
 	}
 }
+
+func TestRestartNotify_UpgradeRequiresMatchingVersionAndHealthySupervisor(t *testing.T) {
+	old := CurrentVersion
+	CurrentVersion = "v2.0.0"
+	t.Cleanup(func() { CurrentVersion = old })
+	for _, scenario := range []struct {
+		name, target, failure string
+		active                bool
+	}{
+		{"matching", "fork-v2.0.0", "", true},
+		{"wrong-version", "fork-v3.0.0", "", false},
+		{"old-supervisor", "fork-v2.0.0", "supervisor version mismatch", false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			p := &restartNotifyStub{name: "fixture"}
+			e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+			t.Cleanup(func() { _ = e.Stop() })
+			p.markReady(t, e)
+			req := RestartRequest{SessionKey: "s", Platform: p.Name(), TargetVersion: scenario.target, Error: scenario.failure}
+			dir := t.TempDir()
+			if err := SaveRestartNotify(dir, req); err != nil {
+				t.Fatal(err)
+			}
+			loaded := ConsumeRestartNotify(dir)
+			if loaded == nil || *loaded != req {
+				t.Fatal("restart metadata lost", loaded)
+			}
+			e.SetPendingRestartNotify(loaded)
+			texts := p.waitForSent(t, 1, time.Second)
+			if len(texts) != 1 {
+				t.Fatal(texts)
+			}
+			if strings.Contains(texts[0], "Update active") != scenario.active {
+				t.Fatal(texts)
+			}
+			if !scenario.active && !strings.Contains(texts[0], "failed") {
+				t.Fatal(texts)
+			}
+		})
+	}
+}

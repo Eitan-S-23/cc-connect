@@ -114,27 +114,35 @@ func ValidateRestart(config string) error {
 // with Python launchers as well as PowerShell; it does not rewrite their actions.
 func findRestartTask(pid uint32) (restartTask, error) {
 	script := fmt.Sprintf(`
+$allProcesses = @(Get-CimInstance Win32_Process)
 $ancestors = @()
 $next = %d
 $seen = @{}
 while ($next -gt 0 -and -not $seen.ContainsKey($next)) {
  $seen[$next] = $true
- $p = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $next)
+ $p = $allProcesses | Where-Object ProcessId -eq $next | Select-Object -First 1
  if ($null -eq $p) { break }
- $ancestors += @{ executable=$p.ExecutablePath; command=$p.CommandLine }
+ $ancestors += @{ pid=[int]$p.ProcessId; executable=$p.ExecutablePath; command=$p.CommandLine }
  $next = [int]$p.ParentProcessId
 }
 $tasks = @(Get-ScheduledTask | Where-Object State -eq 'Running' | ForEach-Object {
  @{ name=$_.TaskName; path=$_.TaskPath; principal=$_.Principal.UserId; logon=[string]$_.Principal.LogonType; actions=@($_.Actions | ForEach-Object { @{ execute=$_.Execute; arguments=$_.Arguments; directory=$_.WorkingDirectory } }) }
 })
-@{ ancestors=$ancestors; tasks=$tasks } | ConvertTo-Json -Depth 8 -Compress
+$processes = @($allProcesses | ForEach-Object { @{ pid=[int]$_.ProcessId; parent=[int]$_.ParentProcessId; supervisor=($_.CommandLine -match '(?:^|\s)_daemon-supervise(?:\s|$)') } })
+@{ ancestors=$ancestors; tasks=$tasks; processes=$processes } | ConvertTo-Json -Depth 8 -Compress
 `, pid)
 	out, err := runPowerShell(script)
 	if err != nil {
 		return restartTask{}, fmt.Errorf("discover current scheduled task: %w", err)
 	}
 	var snapshot struct {
+		Processes []struct {
+			PID        uint32 `json:"pid"`
+			Parent     uint32 `json:"parent"`
+			Supervisor bool   `json:"supervisor"`
+		} `json:"processes"`
 		Ancestors []struct {
+			PID        uint32 `json:"pid"`
 			Executable string `json:"executable"`
 			Command    string `json:"command"`
 		} `json:"ancestors"`
@@ -182,6 +190,24 @@ $tasks = @(Get-ScheduledTask | Where-Object State -eq 'Running' | ForEach-Object
 					}
 				}
 				if equal {
+					children := map[uint32][]uint32{}
+					supervisors := map[uint32]bool{}
+					for _, process := range snapshot.Processes {
+						children[process.Parent] = append(children[process.Parent], process.PID)
+						supervisors[process.PID] = process.Supervisor
+					}
+					count := 0
+					if supervisors[ancestor.PID] {
+						count++
+					}
+					for _, child := range descendantPIDs(ancestor.PID, children) {
+						if supervisors[child] {
+							count++
+						}
+					}
+					if count != 1 || len(task.Actions) != 1 {
+						return restartTask{}, fmt.Errorf("scheduled task does not exclusively own this supervisor (supervisors: %d, actions: %d)", count, len(task.Actions))
+					}
 					matched = true
 				}
 			}
@@ -332,7 +358,10 @@ func clearCompletedRestart(dir string) error {
 		if h, err := openIdentifiedProcess(coordinator); err == nil {
 			defer windows.CloseHandle(h)
 			if !processExited(h) {
-				return fmt.Errorf("previous restart controller is still running")
+				status, err := windows.WaitForSingleObject(h, 30000)
+				if err != nil || status != windows.WAIT_OBJECT_0 {
+					return fmt.Errorf("previous restart controller is still running")
+				}
 			}
 		}
 	}

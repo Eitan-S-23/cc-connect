@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,8 +77,24 @@ func (t UpdateTransaction) save() error {
 	if err := CheckUpdatePath(path); err != nil {
 		return err
 	}
-	// Receipts are read only while holding the install lock, or after install.
-	return os.WriteFile(path, data, 0o600)
+	f, err := os.CreateTemp(t.Directory(), ".receipt-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func updateTransactions(target string) ([]UpdateTransaction, error) {
@@ -188,7 +205,10 @@ func installUpdateTransaction(target string, data []byte, version string, rename
 	if err := CheckUpdatePath(tx.Directory()); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(tx.Directory(), 0o700); err != nil {
+	if err := os.MkdirAll(target+".updates", 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Mkdir(tx.Directory(), 0o700); err != nil {
 		return nil, err
 	}
 	if err := tx.save(); err != nil {
@@ -198,7 +218,7 @@ func installUpdateTransaction(target string, data []byte, version string, rename
 	defer removeUpdateFile(staged)
 	f, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm()|0o111)
 	if err != nil {
-		return nil, err
+		return nil, recordInstallFailure(tx, err)
 	}
 	_, writeErr := f.Write(data)
 	syncErr := f.Sync()
@@ -211,28 +231,27 @@ func installUpdateTransaction(target string, data []byte, version string, rename
 		err = closeErr
 	}
 	if err != nil {
-		tx.State = "install_failed"
-		_ = tx.save()
-		return nil, err
+		return nil, recordInstallFailure(tx, err)
 	}
 	if err := rename(target, tx.Backup()); err != nil {
-		tx.State = "install_failed"
-		_ = tx.save()
-		return nil, fmt.Errorf("backup old executable: %w", err)
+		return nil, recordInstallFailure(tx, fmt.Errorf("backup old executable: %w", err))
 	}
 	if err := rename(staged, target); err != nil {
 		if restoreErr := rename(tx.Backup(), target); restoreErr != nil {
 			return nil, fmt.Errorf("install failed: %v; rollback failed (backup at %s): %w", err, tx.Backup(), restoreErr)
 		}
-		tx.State = "install_failed"
-		_ = tx.save()
-		return nil, fmt.Errorf("install failed; original executable restored: %w", err)
+		return nil, recordInstallFailure(tx, fmt.Errorf("install failed; original executable restored: %w", err))
 	}
 	tx.State = "installed"
 	if err := tx.save(); err != nil {
 		return nil, fmt.Errorf("installed executable but could not persist receipt: %w", err)
 	}
 	return tx, nil
+}
+
+func recordInstallFailure(tx *UpdateTransaction, err error) error {
+	tx.State = "install_failed"
+	return errors.Join(err, tx.save())
 }
 
 // ActivateUpdate requires the digest captured by the running new instance.
@@ -318,6 +337,17 @@ func pruneUpdateHistory(target string) error {
 				return fmt.Errorf("unexpected directory in update transaction")
 			}
 			if strings.HasSuffix(entry.Name(), ".exe") {
+				digest, err := executableDigest(path)
+				if err != nil {
+					return err
+				}
+				want := tx.PreviousSHA256
+				if entry.Name() == "failed.exe" {
+					want = tx.SHA256
+				}
+				if digest != want {
+					return fmt.Errorf("historical executable no longer matches its receipt: %s", path)
+				}
 				inUse, err := updateFileInUse(path)
 				if err != nil {
 					return fmt.Errorf("inspect historical backup: %w", err)

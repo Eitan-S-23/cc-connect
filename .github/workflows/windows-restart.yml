@@ -44,6 +44,7 @@ jobs:
           if ($code -eq 0) { throw 'Pre-fix regression unexpectedly passed' }
           if (-not (Select-String -Path .cache/evidence/baseline.log -SimpleMatch 'REGRESSION: mapped historical backup prevents the next upgrade')) { throw 'Baseline failed for an unrelated reason' }
           Write-Host '::notice::Pre-fix mapped executable regression failed as expected.'
+          exit 0
       - name: Windows process, backup and restart regressions
         run: .github/windows-ci-command.ps1 focused go test -tags goolm,no_web -count=1 -v -timeout 12m ./core ./daemon ./cmd/cc-connect -run 'Test(Windows|UpdateTransaction|RestartNotify|CUJ_U1|RunCommandInKillJob|AcquireSupervisor|WaitForSupervisor|AdoptExisting)'
       - name: Full Windows tests

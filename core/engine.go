@@ -293,11 +293,12 @@ func (e *Engine) dispatchRestartNotify(req *RestartRequest) error {
 		return fmt.Errorf("reconstruct reply ctx: %w", err)
 	}
 	text := e.i18n.T(MsgRestartSuccess)
-	if req.TargetVersion != "" && strings.TrimPrefix(req.TargetVersion, "fork-") != strings.TrimPrefix(CurrentVersion, "fork-") && req.Error == "" {
-		req.Error = fmt.Sprintf("expected %s, running %s", req.TargetVersion, CurrentVersion)
+	restartError := req.Error
+	if req.TargetVersion != "" && strings.TrimPrefix(req.TargetVersion, "fork-") != strings.TrimPrefix(CurrentVersion, "fork-") && restartError == "" {
+		restartError = fmt.Sprintf("expected %s, running %s", req.TargetVersion, CurrentVersion)
 	}
-	if req.Error != "" {
-		text = e.i18n.Tf(MsgRestartFailed, req.Error)
+	if restartError != "" {
+		text = e.i18n.Tf(MsgRestartFailed, restartError)
 	} else if req.TargetVersion != "" {
 		text = e.i18n.Tf(MsgUpgradeActivated, CurrentVersion)
 	} else if CurrentVersion != "" {

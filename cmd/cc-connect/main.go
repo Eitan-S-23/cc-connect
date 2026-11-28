@@ -443,6 +443,7 @@ func main() {
 		}
 
 		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang)
+		engine.SetRestartValidator(func() error { return daemon.ValidateRestart(configPath) })
 		// Wire display settings including show_context_indicator and reply_footer
 		// Global [display] config can be overridden by project-level settings
 		_, _, _, _, _, showCtx, showFooter, _ := config.EffectiveDisplay(cfg, &proj)
@@ -1337,9 +1338,6 @@ func main() {
 		apiSrv.Start()
 	}
 
-	for _, e := range engines {
-		e.SetRestartValidator(func() error { return daemon.ValidateRestart(configPath) })
-	}
 	slog.Info("cc-connect is running", "projects", len(engines))
 	activationErr := startupErr
 	if activationErr == nil {

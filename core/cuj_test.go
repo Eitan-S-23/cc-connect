@@ -166,6 +166,15 @@ func TestCUJ_U1_ForkUpgradeChecksConfirmsAndRestarts(t *testing.T) {
 
 	// Successful confirmation queues the original post-restart notification.
 	u.err = nil
+	e.SetRestartValidator(func() error { return errors.New("legacy supervisor must be restarted") })
+	p.clearSent()
+	before := len(u.installs)
+	send("unsafe-restart", "owner", "/upgrade confirm")
+	if len(u.installs) != before || !strings.Contains(strings.Join(p.getSent(), "\n"), "legacy supervisor") {
+		t.Fatal("unsafe supervisor allowed installation")
+	}
+	assertNoRestart()
+	e.SetRestartValidator(nil)
 	p.clearSent()
 	send("success", "owner", "/update confirm")
 	if !strings.Contains(strings.Join(p.getSent(), "\n"), u.release.TagName) || len(u.installs) != 2 || u.installs[1] != u.release.TagName {
@@ -175,6 +184,12 @@ func TestCUJ_U1_ForkUpgradeChecksConfirmsAndRestarts(t *testing.T) {
 	case req := <-RestartCh:
 		if req.SessionKey != "test:owner" || req.Platform != "test" {
 			t.Fatal(req)
+		}
+		if req.TargetVersion != u.release.TagName {
+			t.Fatal("target version lost across restart", req)
+		}
+		if text := strings.Join(p.getSent(), "\n"); !strings.Contains(text, "installed on disk") || strings.Contains(text, "Update active") {
+			t.Fatal("installation falsely reported as activation", text)
 		}
 	default:
 		t.Fatal("successful update did not request restart")

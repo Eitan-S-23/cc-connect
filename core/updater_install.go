@@ -202,6 +202,9 @@ func updateExecutablePath() (string, error) {
 	if strings.HasSuffix(target, ".old") || strings.HasSuffix(target, " (deleted)") {
 		return "", fmt.Errorf("running executable has already been replaced; restart first")
 	}
+	if (filepath.Base(target) == "previous.exe" || filepath.Base(target) == "failed.exe") && strings.HasSuffix(filepath.Dir(filepath.Dir(target)), ".updates") {
+		return "", fmt.Errorf("running an update backup; start the installed executable before updating")
+	}
 	return target, nil
 }
 
