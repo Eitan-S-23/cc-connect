@@ -40,6 +40,12 @@ jobs:
           if ($code -eq 0) { throw 'Pre-fix regression unexpectedly passed' }
           if (-not (Select-String -Path .cache/evidence/baseline.log -SimpleMatch 'REGRESSION: mapped historical backup prevents the next upgrade')) { throw 'Baseline failed for an unrelated reason' }
           Write-Host '::notice::Pre-fix mapped executable regression failed as expected.'
+          Copy-Item .github/fixtures/legacy-supervisor_windows_test.go .cache/baseline/daemon/legacy-supervisor_windows_test.go
+          Push-Location .cache/baseline
+          go test -c -tags 'goolm,no_web' -o "$env:GITHUB_WORKSPACE/.cache/bin/legacy-supervisor.exe" ./daemon
+          if ($LASTEXITCODE -ne 0) { throw 'Legacy supervisor fixture did not compile' }
+          Pop-Location
+          "CC_LEGACY_SUPERVISOR_FIXTURE=$env:GITHUB_WORKSPACE/.cache/bin/legacy-supervisor.exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           exit 0
       - name: Windows process, backup and restart regressions
         run: .github/windows-ci-command.ps1 focused go test -tags 'goolm,no_web' -count=1 -v -timeout 12m ./core ./daemon ./cmd/cc-connect -run 'Test(Windows|UpdateTransaction|RestartNotify|CUJ_U1|RunCommandInKillJob|AcquireSupervisor|WaitForSupervisor|AdoptExisting)'

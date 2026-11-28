@@ -117,7 +117,7 @@ func runRestartFixture(config string) error {
 		return err
 	}
 	supervisor, err := currentSupervisor(config, version, digest)
-	if err != nil {
+	if err != nil && activation == nil {
 		return err
 	}
 	state := restartReady{Version: version, SHA256: digest, Main: main, Supervisor: supervisor}
@@ -347,6 +347,7 @@ Start-ScheduledTask -TaskName %s
 				if version, err := fixtureVersion(binary); err != nil || version != "D" {
 					t.Fatal("failed startup did not restore D", version, err)
 				}
+				waitFixtureControllerExit(t, config)
 				t.Log("unstartable next supervisor: timed out, restored D, failure preserved in receipt")
 			}
 		})
@@ -432,5 +433,142 @@ func TestWindowsRestartRefusesChangedTaskAndReportsStartFailure(t *testing.T) {
 	}
 	if err := startBoundTask(task); err == nil || !strings.Contains(err.Error(), "start current") {
 		t.Fatal("start failure hidden", err)
+	}
+}
+
+func TestWindowsLegacyReleaseToFixedReleaseRequiresCompleteRestart(t *testing.T) {
+	if os.Getenv("CC_WINDOWS_TASK_TESTS") != "1" {
+		t.Skip("requires isolated task runner")
+	}
+	legacyPath := os.Getenv("CC_LEGACY_SUPERVISOR_FIXTURE")
+	if legacyPath == "" {
+		t.Fatal("real baseline supervisor fixture missing")
+	}
+	dir := t.TempDir()
+	config := filepath.Join(dir, "fixture.json")
+	binary := filepath.Join(dir, "bot.exe")
+	if err := os.WriteFile(config, []byte("isolated legacy transition"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixedA := append(append([]byte(nil), image...), []byte(fixtureMarker+"A\n")...)
+	fixedB := append(append([]byte(nil), image...), []byte(fixtureMarker+"B\n")...)
+	imageB := filepath.Join(dir, "B.exe")
+	if err := os.WriteFile(imageB, fixedB, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(dir, "launcher.ps1")
+	if err := os.WriteFile(script, []byte(fmt.Sprintf("& %s '_daemon-supervise' '--config' %s\nexit $LASTEXITCODE\n", powerShellLiteral(binary), powerShellLiteral(config))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taskName := fmt.Sprintf("cc-connect-legacy-isolated-%d-%d", os.Getpid(), time.Now().UnixNano())
+	args := windows.ComposeCommandLine([]string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script})
+	_, err = runPowerShell(fmt.Sprintf(`
+$action=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument %s
+$principal=New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName %s -Action $action -Principal $principal -Settings $settings | Out-Null
+Start-ScheduledTask -TaskName %s
+`, powerShellLiteral(args), powerShellLiteral(taskName), powerShellLiteral(taskName)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = runPowerShell(fmt.Sprintf("Stop-ScheduledTask -TaskName %s; Unregister-ScheduledTask -TaskName %s -Confirm:$false", powerShellLiteral(taskName), powerShellLiteral(taskName)))
+	})
+	readyPath := filepath.Join(dir, "fixture-ready.json")
+	old := waitFixture(t, readyPath, func(r restartReady) bool { return r.Version == "LEGACY" })
+	// The old updater's actual filesystem operations; its mapped-file failure
+	// is separately proved against the unchanged baseline regression.
+	if err := os.Rename(binary, binary+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, fixedA, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "legacy-exit"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mixed := waitFixture(t, readyPath, func(r restartReady) bool { return r.Version == "A" })
+	if !strings.Contains(mixed.Error, "legacy supervisor") {
+		t.Fatal("new main claimed activation under real old supervisor", mixed)
+	}
+	oldSupervisor, err := openIdentifiedProcess(old.Supervisor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(oldSupervisor)
+	if processExited(oldSupervisor) {
+		t.Fatal("baseline supervisor unexpectedly restarted itself")
+	}
+	if err := os.Remove(binary + ".old"); err == nil {
+		t.Fatal("baseline supervisor did not hold old image")
+	}
+	fingerprint, err := taskFingerprint("\\", taskName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := restartTask{Name: taskName, Path: "\\", Fingerprint: fingerprint}
+	main, err := openIdentifiedProcess(mixed.Main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(main)
+	if err := stopBoundTask(task, []windows.Handle{main, oldSupervisor}, time.Now().Add(30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := startBoundTask(task); err != nil {
+		t.Fatal(err)
+	}
+	active := waitFixture(t, readyPath, func(r restartReady) bool { return r.Main != mixed.Main && r.Version == "A" })
+	if active.Error != "" {
+		t.Fatal(active.Error)
+	}
+	if err := writeRestartJSON(filepath.Join(dir, "request.json"), fixtureRequest{Action: "upgrade", Image: imageB, Version: "B"}); err != nil {
+		t.Fatal(err)
+	}
+	next := waitFixture(t, readyPath, func(r restartReady) bool { return r.Version == "B" })
+	if next.Error != "" {
+		t.Fatal(next.Error)
+	}
+	waitFixtureProcessesExit(t, active)
+	if _, err := os.Stat(binary + ".old"); err != nil {
+		t.Fatal("legacy backup was unexpectedly deleted", err)
+	}
+	waitFixtureControllerExit(t, config)
+	t.Log("real e2b9795 supervisor -> fixed A (activation withheld) -> authorized full task restart -> fixed B upgrade succeeded without deleting legacy .old")
+}
+
+func waitFixtureControllerExit(t *testing.T, config string) {
+	t.Helper()
+	var controller processIdentity
+	if err := readRestartJSON(filepath.Join(restartDirectory(config), "controller.json"), &controller); err != nil {
+		t.Fatal(err)
+	}
+	h, err := openIdentifiedProcess(controller)
+	if err != nil {
+		if restartProcessGone(err) {
+			return
+		}
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(h)
+	status, err := windows.WaitForSingleObject(h, 30000)
+	if err != nil || status != windows.WAIT_OBJECT_0 {
+		t.Fatalf("controller still active: %d %v", status, err)
 	}
 }

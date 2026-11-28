@@ -1433,7 +1433,9 @@ waitForShutdown:
 	if restartReq != nil {
 		if err := core.SaveRestartNotify(cfg.DataDir, *restartReq); err != nil {
 			slog.Error("restart: save notify failed", "error", err)
-			os.Exit(1)
+			if preparedRestart != nil {
+				os.Exit(1)
+			}
 		}
 		if preparedRestart != nil {
 			if err := preparedRestart.Commit(); err != nil {

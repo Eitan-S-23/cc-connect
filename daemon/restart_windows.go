@@ -24,6 +24,12 @@ const supervisorVersionEnv = "CC_DAEMON_SUPERVISOR_VERSION"
 const supervisorHashEnv = "CC_DAEMON_SUPERVISOR_SHA256"
 const supervisorConfigEnv = "CC_DAEMON_SUPERVISOR_CONFIG"
 
+var errRestartProcessChanged = errors.New("process identity changed")
+
+func restartProcessGone(err error) bool {
+	return processGone(err) || errors.Is(err, errRestartProcessChanged)
+}
+
 func identifyProcess(pid uint32) (processIdentity, error) {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, pid)
 	if err != nil {
@@ -49,7 +55,7 @@ func openIdentifiedProcess(identity processIdentity) (windows.Handle, error) {
 	}
 	if uint64(created.HighDateTime)<<32|uint64(created.LowDateTime) != identity.Created {
 		windows.CloseHandle(h)
-		return 0, fmt.Errorf("process identity changed (PID %d)", identity.PID)
+		return 0, fmt.Errorf("%w (PID %d)", errRestartProcessChanged, identity.PID)
 	}
 	return h, nil
 }
@@ -297,6 +303,11 @@ func PrepareRestart(config, dataDir, binary, version string) (*PreparedRestart, 
 			return nil, fmt.Errorf("restart controller backup checksum mismatch")
 		}
 		plan.ControllerBinary = tx.Backup()
+		// A manual /restart can be retrying an already installed update after
+		// controller preparation failed. The receipt owns the target version.
+		if tx.Version != "" {
+			plan.Version = tx.Version
+		}
 	}
 	planPath := filepath.Join(dir, "plan.json")
 	if err := writeRestartJSON(planPath, plan); err != nil {
@@ -363,6 +374,8 @@ func clearCompletedRestart(dir string) error {
 					return fmt.Errorf("previous restart controller is still running")
 				}
 			}
+		} else if !restartProcessGone(err) {
+			return fmt.Errorf("cannot verify previous controller exit: %w", err)
 		}
 	}
 	allowed := map[string]bool{"plan.json": true, "armed.json": true, "shutdown-ready.json": true, "ready.json": true, "result.json": true, "controller.json": true, "startup.json": true}
@@ -613,6 +626,8 @@ func rollbackRestart(plan restartPlan) string {
 			if h, err := openIdentifiedProcess(id); err == nil {
 				handles = append(handles, h)
 				defer windows.CloseHandle(h)
+			} else if !restartProcessGone(err) {
+				return "rollback not attempted: cannot verify replacement process: " + err.Error()
 			}
 		}
 	}
@@ -621,6 +636,8 @@ func rollbackRestart(plan restartPlan) string {
 		if h, err := openIdentifiedProcess(started); err == nil {
 			handles = append(handles, h)
 			defer windows.CloseHandle(h)
+		} else if !restartProcessGone(err) {
+			return "rollback not attempted: cannot verify replacement supervisor: " + err.Error()
 		}
 	}
 	if err := stopBoundTask(plan.Task, handles, time.Now().Add(plan.Timeout)); err != nil {
