@@ -11,8 +11,9 @@ if ($code -ne 0) {
  for ($i=0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '--- FAIL:|panic:|fatal error:|WARNING: DATA RACE') { $indices+=$i } }
  if ($indices.Count -eq 0) { $indices=@([Math]::Max(0,$lines.Count-100)) }
  foreach ($i in ($indices | Select-Object -First 20)) {
+  $start=[Math]::Max(0,$i-15)
   $end=[Math]::Min($lines.Count-1,$i+60)
-  $text=($lines[$i..$end]) -join "`n"
+  $text=($lines[$start..$end]) -join "`n"
   if ($text.Length -gt 14000) { $text=$text.Substring(0,14000) }
   $text=$text.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
   Write-Host "::error title=${Label}::$text"

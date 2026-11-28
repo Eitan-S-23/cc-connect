@@ -95,8 +95,14 @@ func runRestartFixture(config string) error {
 		return fmt.Errorf("fixture duplicate instance: %w", err)
 	}
 	defer windows.CloseHandle(lock)
+	if err := windows.SetEndOfFile(lock); err != nil {
+		return err
+	}
 	var written uint32
 	if err := windows.WriteFile(lock, []byte(fmt.Sprint(os.Getpid())), &written, nil); err != nil {
+		return err
+	}
+	if err := windows.FlushFileBuffers(lock); err != nil {
 		return err
 	}
 	exe, err := os.Executable()
