@@ -72,7 +72,7 @@ func currentSupervisor(config, version, digest string) (processIdentity, error) 
 		return identity, fmt.Errorf("supervisor configuration does not match this instance")
 	}
 	if version != "" && normalizeRestartVersion(version) != normalizeRestartVersion(os.Getenv(supervisorVersionEnv)) {
-		return identity, fmt.Errorf("supervisor version differs from main process; complete scheduled-task restart required")
+		return identity, fmt.Errorf("supervisor version %s differs from main process %s; complete scheduled-task restart required", os.Getenv(supervisorVersionEnv), version)
 	}
 	if digest != "" && digest != os.Getenv(supervisorHashEnv) {
 		return identity, fmt.Errorf("supervisor executable differs from main process; complete scheduled-task restart required")
@@ -464,6 +464,9 @@ func activateRunningUpdate(version, digest string) error {
 }
 
 func RunRestartController(path string) (resultErr error) {
+	if !currentProcessElevated() {
+		return fmt.Errorf("restart controller requires the current instance's elevated identity")
+	}
 	var plan restartPlan
 	if err := readRestartJSON(path, &plan); err != nil {
 		return err

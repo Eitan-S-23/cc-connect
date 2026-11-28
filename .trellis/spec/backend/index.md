@@ -10,6 +10,8 @@ describe contracts, not permission to build, install, restart or write elsewhere
 
 - [Release-first updates](release-first.md): tagged Actions artifacts, full-suite
   gates, unpublished-version ordering and updater-only deployment.
+- [Windows restart and upgrade](windows-restart-upgrade.md): independent task
+  coordination, unique backups, activation verification and real process tests.
 - [Agent preferences](agent-preferences.md): durable mode/reasoning selections,
   workspace isolation, startup restoration and failure rollback.
 

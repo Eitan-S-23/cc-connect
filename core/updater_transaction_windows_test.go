@@ -95,10 +95,22 @@ func TestWindowsUpdatePermissionErrorIsNotTreatedAsOccupiedBackup(t *testing.T) 
 	if err := windows.SetNamedSecurityInfo(target, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
 		t.Fatal(err)
 	}
+	dirSD, err := windows.SecurityDescriptorFromString("D:(D;;0x40;;;WD)(A;;FA;;;WD)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirACL, _, err := dirSD.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dirACL, nil); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		allow, _ := windows.SecurityDescriptorFromString("D:(A;;FA;;;WD)")
 		acl, _, _ := allow.DACL()
 		_ = windows.SetNamedSecurityInfo(target, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
+		_ = windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
 	})
 	_, err = InstallUpdateTransaction(target, []byte("replacement"), "B")
 	if err == nil || !strings.Contains(err.Error(), "backup old executable") {
