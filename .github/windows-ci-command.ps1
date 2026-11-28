@@ -8,6 +8,6 @@ if ($code -ne 0) {
  $lines=Get-Content $log
  $text=($lines | Select-Object -Last 100) -join "`n"
  $text=$text.Replace('%','%25').Replace("`r",'%0D').Replace("`n",'%0A')
- Write-Host "::error title=$Label::$text"
+ Write-Host "::error title=${Label}::$text"
  exit $code
 }

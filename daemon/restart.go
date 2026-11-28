@@ -22,17 +22,18 @@ type restartTask struct {
 }
 
 type restartPlan struct {
-	ID         string          `json:"id"`
-	Config     string          `json:"config"`
-	Binary     string          `json:"binary"`
-	DataDir    string          `json:"data_dir"`
-	Version    string          `json:"version"`
-	SHA256     string          `json:"sha256"`
-	Task       restartTask     `json:"task"`
-	Main       processIdentity `json:"main"`
-	Supervisor processIdentity `json:"supervisor"`
-	Created    time.Time       `json:"created"`
-	Timeout    time.Duration   `json:"timeout"`
+	ID               string          `json:"id"`
+	Config           string          `json:"config"`
+	Binary           string          `json:"binary"`
+	ControllerBinary string          `json:"controller_binary"`
+	DataDir          string          `json:"data_dir"`
+	Version          string          `json:"version"`
+	SHA256           string          `json:"sha256"`
+	Task             restartTask     `json:"task"`
+	Main             processIdentity `json:"main"`
+	Supervisor       processIdentity `json:"supervisor"`
+	Created          time.Time       `json:"created"`
+	Timeout          time.Duration   `json:"timeout"`
 }
 
 type restartReady struct {

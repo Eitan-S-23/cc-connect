@@ -99,6 +99,13 @@ func ValidateRestart(config string) error {
 	if _, err := currentSupervisor(config, "", ""); err != nil {
 		return err
 	}
+	dir := restartDirectory(config)
+	if _, err := os.Stat(dir); err == nil {
+		var result restartResult
+		if err := readRestartJSON(filepath.Join(dir, "result.json"), &result); err != nil {
+			return fmt.Errorf("another restart is pending; inspect %s", dir)
+		}
+	}
 	_, err := findRestartTask(uint32(os.Getpid()))
 	return err
 }
@@ -252,6 +259,19 @@ func PrepareRestart(config, dataDir, binary, version string) (*PreparedRestart, 
 		return nil, err
 	}
 	plan := restartPlan{ID: hex.EncodeToString(nonce[:]), Config: config, DataDir: dataDir, Binary: binary, Version: version, SHA256: digest, Task: task, Main: main, Supervisor: supervisor, Created: time.Now().UTC(), Timeout: restartTimeout}
+	plan.ControllerBinary = binary
+	if tx, err := core.PendingUpdate(binary); err != nil {
+		return nil, err
+	} else if tx != nil {
+		backupSHA, err := core.ExecutableSHA256(tx.Backup())
+		if err != nil {
+			return nil, err
+		}
+		if backupSHA != tx.PreviousSHA256 {
+			return nil, fmt.Errorf("restart controller backup checksum mismatch")
+		}
+		plan.ControllerBinary = tx.Backup()
+	}
 	planPath := filepath.Join(dir, "plan.json")
 	if err := writeRestartJSON(planPath, plan); err != nil {
 		return nil, err
@@ -290,7 +310,7 @@ $action=New-ScheduledTaskAction -Execute %s -Argument %s
 $settings=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName %s -Action $action -Principal $principal -Settings $settings | Out-Null
 Start-ScheduledTask -TaskName %s
-`, powerShellLiteral(plan.Binary), powerShellLiteral(args), powerShellLiteral(controllerTaskName(plan.ID)), powerShellLiteral(controllerTaskName(plan.ID))))
+`, powerShellLiteral(plan.ControllerBinary), powerShellLiteral(args), powerShellLiteral(controllerTaskName(plan.ID)), powerShellLiteral(controllerTaskName(plan.ID))))
 	if err != nil {
 		return fmt.Errorf("launch independent restart task: %w", err)
 	}
@@ -359,7 +379,10 @@ func ConfirmRestartReady(config, version, digest string) error {
 	var plan restartPlan
 	readErr := readRestartJSON(filepath.Join(dir, "plan.json"), &plan)
 	if os.IsNotExist(readErr) {
-		return err
+		if err != nil {
+			return err
+		}
+		return activateRunningUpdate(version, digest)
 	}
 	if readErr != nil {
 		return readErr
@@ -394,6 +417,21 @@ func ConfirmRestartReady(config, version, digest string) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return fmt.Errorf("restart activation confirmation timed out")
+}
+
+func activateRunningUpdate(version, digest string) error {
+	binary, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	tx, err := core.PendingUpdate(binary)
+	if err != nil || tx == nil {
+		return err
+	}
+	if normalizeRestartVersion(version) != normalizeRestartVersion(tx.Version) {
+		return fmt.Errorf("running version does not match installed transaction")
+	}
+	return core.ActivateUpdate(binary, digest)
 }
 
 func RunRestartController(path string) (resultErr error) {

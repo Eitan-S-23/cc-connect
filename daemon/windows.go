@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -19,8 +21,13 @@ const (
 )
 
 var runPowerShell = func(script string) (string, error) {
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", strictPowerShell(script))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", strictPowerShell(script))
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("PowerShell task operation timed out: %w", ctx.Err())
+	}
 	return strings.TrimSpace(string(out)), err
 }
 
