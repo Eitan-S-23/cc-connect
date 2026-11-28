@@ -3584,19 +3584,7 @@ func (e *Engine) drainOrphanedQueue(session *Session, sessions *SessionManager, 
 		return
 	}
 
-	// Stop unsolicited reader before draining — drainPendingMessages reads
-	// from Events() and we must not have concurrent readers.
-	e.stopUnsolicitedReader(state)
-
 	unlocked = e.drainPendingMessages(state, session, sessions, interactiveKey, lockGen)
-
-	// Restart unsolicited reader if the session is still alive and clean.
-	state.mu.Lock()
-	alive := state.agentSession != nil && state.agentSession.Alive() && !state.stopped && !state.eventsNeedResync
-	state.mu.Unlock()
-	if alive {
-		e.startUnsolicitedReader(state, session, sessions, interactiveKey, workspaceDir)
-	}
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -4225,23 +4213,6 @@ func (e *Engine) processInteractiveMessageWith(p Platform, msg *Message, session
 		slog.Warn("slow agent send", "elapsed", elapsed, "session", msg.SessionKey, "content_len", len(msg.Content))
 	}
 	stopTyping = nil // ownership transferred; prevent defer from double-stopping
-
-	// Start unsolicited reader and arm the idle close timer BEFORE draining
-	// queued messages. drainPendingMessages releases the session lock, and
-	// without this ordering the next user message can race in, call
-	// cancelAgentSessionIdleClose (a no-op since nothing was scheduled yet),
-	// and then the late schedule below arms a timer that no subsequent cancel
-	// will catch — closing the live session mid-turn. See #1686 P1-C P1-2.
-	// The schedule's own state checks (agentSession nil, stopped, etc.) and
-	// cleanupInteractiveStateForIdleToken's stale-token guard make it safe to
-	// leave a scheduled timer running across drain.
-	state.mu.Lock()
-	alive := state.agentSession != nil && state.agentSession.Alive() && !state.stopped && !state.eventsNeedResync
-	state.mu.Unlock()
-	if alive {
-		e.startUnsolicitedReader(state, session, sessions, interactiveKey, workspaceDir)
-		e.scheduleAgentSessionIdleClose(interactiveKey, state)
-	}
 
 	// Guard against a narrow race: a message may have been queued between
 	// processInteractiveEvents observing an empty queue and returning here
@@ -7042,6 +7013,11 @@ func (e *Engine) notifyDroppedQueuedMessages(state *interactiveState, reason err
 // state.mu) to close the race window between "queue empty" and "session unlocked".
 // Returns true if the session was unlocked by this call.
 func (e *Engine) drainPendingMessages(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, lockGen uint64) bool {
+	// This drain owns the event stream until every queued turn finishes.
+	// A background reader must not consume a queued turn's terminal event.
+	e.stopUnsolicitedReader(state)
+	e.cancelAgentSessionIdleClose(state)
+	idleReady := false
 	for {
 		state.mu.Lock()
 		if len(state.pendingMessages) == 0 && state.restartAfterTurn {
@@ -7055,6 +7031,22 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 			continue
 		}
 		if len(state.pendingMessages) == 0 {
+			if !idleReady {
+				alive := state.agentSession != nil && state.agentSession.Alive() && !state.stopped && !state.eventsNeedResync
+				workspaceDir := state.workspaceDir
+				state.mu.Unlock()
+				// Start background delivery and arm the idle timer while the
+				// session is still locked. Starting after Unlock can race a
+				// new foreground turn and close its agent mid-task (#1686).
+				if alive {
+					e.startUnsolicitedReader(state, session, sessions, sessionKey, workspaceDir)
+					e.scheduleAgentSessionIdleClose(sessionKey, state)
+				}
+				idleReady = true
+				// Queueing can occur while state.mu is released above. Recheck
+				// before unlocking, and stop the reader if more work arrived.
+				continue
+			}
 			session.Unlock(lockGen)
 			state.mu.Unlock()
 			return true
@@ -7088,6 +7080,11 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		state.fromVoice = queued.fromVoice
 		state.currentTurnUserMessageTimeMs = queued.userMessageTimeMs
 		state.mu.Unlock()
+		if idleReady {
+			e.stopUnsolicitedReader(state)
+			e.cancelAgentSessionIdleClose(state)
+			idleReady = false
+		}
 
 		e.i18n.DetectAndSet(queued.content)
 		prompt := e.buildSenderPrompt(queued.content, queued.userID, queued.userName, queued.msgPlatform, queued.msgSessionKey, queued.channelKey)

@@ -238,6 +238,65 @@ func TestAutoRetryNewInputCancelsWaitAndDrainsQueue(t *testing.T) {
 	}
 	s.events <- Event{Type: EventResult, Done: true, Content: "done"}
 	waitAttentionIdle(t, e)
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "done") {
+		t.Fatal("queued task's final reply was lost")
+	}
+	sendAttentionMessage(e, p, "after-queue", "admin")
+	if got := retryPrompt(t, s); got != "do the work" {
+		t.Fatalf("unexpected follow-up prompt: %q", got)
+	}
+	s.events <- Event{Type: EventResult, Done: true, Content: "follow-up done"}
+	waitAttentionIdle(t, e)
+}
+
+func TestDrainPendingMessages_StopsBackgroundReaderUntilQueuedTurnCompletes(t *testing.T) {
+	e, p, s := newAutoRetryEngine(t)
+	key := "test:attention"
+	session := e.sessions.GetOrCreateActive(key)
+	gen, ok := session.TryLock()
+	if !ok {
+		t.Fatal("could not lock session")
+	}
+	state := &interactiveState{
+		agentSession: s, busySession: session, platform: p, replyCtx: "previous",
+		pendingMessages: []queuedMessage{{
+			content: "queued work", platform: p, replyCtx: "queued",
+			userID: "admin", msgPlatform: "test", msgSessionKey: key,
+		}},
+	}
+	e.interactiveStates[key] = state
+	e.agentSessionIdleTimeoutNanos.Store(int64(time.Hour))
+	e.startUnsolicitedReader(state, session, e.sessions, key, "")
+	state.mu.Lock()
+	oldReaderDone := state.unsolicitedDone
+	state.mu.Unlock()
+	finished := make(chan bool, 1)
+	go func() { finished <- e.drainPendingMessages(state, session, e.sessions, key, gen) }()
+	if got := retryPrompt(t, s); got != "queued work" {
+		t.Fatalf("queued prompt = %q", got)
+	}
+	select {
+	case <-oldReaderDone:
+	default:
+		t.Error("background reader can steal the queued turn's completion event")
+	}
+	s.events <- Event{Type: EventResult, Done: true, Content: "queued result"}
+	select {
+	case unlocked := <-finished:
+		if !unlocked || session.Busy() {
+			t.Fatal("completed queued turn did not release the session")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("queued turn did not finish")
+	}
+	if !strings.Contains(strings.Join(p.getSent(), "\n"), "queued result") {
+		t.Fatal("queued reply was lost")
+	}
+	// Background delivery must resume once foreground work is complete.
+	s.events <- Event{Type: EventResult, Done: true, Content: "background result"}
+	awaitAutoRetry(t, func() bool {
+		return strings.Contains(strings.Join(p.getSent(), "\n"), "background result")
+	})
 }
 
 func TestAutoRetryCardAuthorizationPersistenceAndIsolation(t *testing.T) {

@@ -21,6 +21,7 @@ This is a selective backport onto the custom version, not a replacement with the
 - Carry lock generations through the custom retry, relay and recovery paths; use conversation keys for recovery ownership filtering.
 - Apply upstream deferred model restart behavior to both custom card paths as well as the text command. Failed model changes do not close the session.
 - Reacquire the interactive-state map lock when graceful cancellation fails before falling back to close.
+- Hand event-stream ownership back to the background reader only after queued turns finish. This preserves automatic-retry cancellation and queue draining with upstream's continued background delivery after errors; idle timers are armed before releasing the session lock.
 - Skip upstream skill-only and Russian-documentation edits whose corresponding files/features do not exist in this custom base. Reuse existing custom lifecycle interfaces and test helpers where equivalent.
 
 ## Official commits
